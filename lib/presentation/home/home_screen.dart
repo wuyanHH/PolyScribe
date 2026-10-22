@@ -8,6 +8,7 @@ import '../../services/server/http_server.dart';
 import '../batch/batch_import_screen.dart';
 import '../meeting/live_meeting_screen.dart';
 import '../player/sync_player_screen.dart';
+import '../server/server_console_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -91,12 +92,21 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: '本地 STT 转发服务',
+            tooltip: '本地 STT 转发服务控制台',
             icon: Icon(
               Icons.wifi_tethering,
               color: _isServerRunning ? AppColors.speakerPalette[1].color : Colors.grey,
             ),
-            onPressed: _toggleServer,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ServerConsoleScreen(
+                    server: _localHttpServer,
+                    onToggleServer: _toggleServer,
+                  ),
+                ),
+              );
+            },
           ),
           const SizedBox(width: 8),
         ],

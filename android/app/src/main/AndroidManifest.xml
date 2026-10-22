@@ -34,6 +34,18 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- 系统级 RecognitionService 离线语音引擎声明 -->
+        <service
+            android:name=".stt.PolyScribeRecognitionService"
+            android:label="PolyScribe 离线语音引擎"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
     </application>
     <queries>
         <intent>

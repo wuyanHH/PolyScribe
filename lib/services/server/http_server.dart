@@ -6,6 +6,7 @@ import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/transcript_segment.dart';
+import 'inference_lock_manager.dart';
 
 /// 模拟/真实推理委托回调
 typedef TranscribeAudioHandler = Future<List<TranscriptSegment>> Function(
@@ -47,6 +48,9 @@ class LocalHttpServer {
 
     // 2. OpenAI Whisper 兼容转写接口
     router.post('/v1/audio/transcriptions', (Request request) async {
+      final startTime = DateTime.now();
+      final clientIp = (request.context['shelf.io.connection_info'] as dynamic)?.remoteAddress?.address ?? '127.0.0.1';
+
       try {
         final contentType = request.headers['content-type'] ?? '';
         final queryParams = request.url.queryParameters;
@@ -57,38 +61,60 @@ class LocalHttpServer {
         String filename = 'audio.wav';
 
         if (contentType.contains('multipart/form-data')) {
-          // 读取二进制流并提取有效负载
           audioBytes = await request.read().expand((chunk) => chunk).toList();
         } else {
           audioBytes = await request.read().expand((chunk) => chunk).toList();
         }
 
         if (audioBytes.isEmpty) {
+          InferenceLockManager.instance.recordLog(ApiCallLog(
+            id: 'call_${DateTime.now().millisecondsSinceEpoch}',
+            timestamp: startTime,
+            clientIp: clientIp,
+            endpoint: '/v1/audio/transcriptions',
+            audioBytesLength: 0,
+            latencyMs: DateTime.now().difference(startTime).inMilliseconds,
+            resultPreview: '音频数据为空',
+            statusCode: 400,
+          ));
+
           return Response.badRequest(
             body: jsonEncode({'error': {'message': '音频数据为空'}}),
             headers: {'content-type': 'application/json'},
           );
         }
 
-        // 调用推理处理
-        List<TranscriptSegment> segments = [];
-        if (onTranscribe != null) {
-          segments = await onTranscribe!(audioBytes, filename, diarize: diarize);
-        } else {
-          // 兜底返回默认转写段落
-          segments = [
-            TranscriptSegment(
-              taskId: 'api_task',
-              speakerId: 'SPK_01',
-              speakerName: '主讲人',
-              startMs: 0,
-              endMs: 2500,
-              text: 'PolyScribe 端侧离线语音转写完成。',
-            ),
-          ];
-        }
+        // 加锁单例推理，防止多客户端并发导致 OOM
+        final segments = await InferenceLockManager.instance.runWithLock(() async {
+          if (onTranscribe != null) {
+            return await onTranscribe!(audioBytes, filename, diarize: diarize);
+          } else {
+            return [
+              TranscriptSegment(
+                taskId: 'api_task',
+                speakerId: 'SPK_01',
+                speakerName: '主讲人',
+                startMs: 0,
+                endMs: 2500,
+                text: 'PolyScribe 端侧离线语音转写完成。',
+              ),
+            ];
+          }
+        });
 
         final fullText = segments.map((s) => s.text).join(' ');
+        final latency = DateTime.now().difference(startTime).inMilliseconds;
+
+        InferenceLockManager.instance.recordLog(ApiCallLog(
+          id: 'call_${DateTime.now().millisecondsSinceEpoch}',
+          timestamp: startTime,
+          clientIp: clientIp,
+          endpoint: '/v1/audio/transcriptions',
+          audioBytesLength: audioBytes.length,
+          latencyMs: latency,
+          resultPreview: fullText.length > 50 ? '${fullText.substring(0, 50)}...' : fullText,
+          statusCode: 200,
+        ));
 
         // 根据客户端请求格式格式化输出
         if (responseFormat == 'text') {
