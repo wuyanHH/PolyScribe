@@ -6,6 +6,7 @@ import '../../data/models/meeting_task.dart';
 import '../../engine/model_manager.dart';
 import '../../services/server/http_server.dart';
 import '../batch/batch_import_screen.dart';
+import '../meeting/live_meeting_screen.dart';
 import '../player/sync_player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -220,9 +221,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.mic_rounded,
             color: AppColors.primary,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('实时长会议录音台已就绪 (阶段三功能)')),
-              );
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const LiveMeetingScreen()),
+              ).then((_) => _bootstrap());
             },
           ),
         ),
