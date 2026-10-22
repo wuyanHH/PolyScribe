@@ -1,0 +1,166 @@
+import 'dart:async';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
+import '../core/utils/binary_search_util.dart';
+import '../data/models/transcript_segment.dart';
+
+/// 音字同步播放控制器状态
+class SyncPlayerState {
+  final PlayerState playerState;
+  final int positionMs;
+  final int durationMs;
+  final int activeSegmentIndex;
+  final double playbackRate;
+  final bool isUserTouching;
+
+  const SyncPlayerState({
+    required this.playerState,
+    required this.positionMs,
+    required this.durationMs,
+    required this.activeSegmentIndex,
+    this.playbackRate = 1.0,
+    this.isUserTouching = false,
+  });
+
+  bool get isPlaying => playerState == PlayerState.playing;
+
+  SyncPlayerState copyWith({
+    PlayerState? playerState,
+    int? positionMs,
+    int? durationMs,
+    int? activeSegmentIndex,
+    double? playbackRate,
+    bool? isUserTouching,
+  }) {
+    return SyncPlayerState(
+      playerState: playerState ?? this.playerState,
+      positionMs: positionMs ?? this.positionMs,
+      durationMs: durationMs ?? this.durationMs,
+      activeSegmentIndex: activeSegmentIndex ?? this.activeSegmentIndex,
+      playbackRate: playbackRate ?? this.playbackRate,
+      isUserTouching: isUserTouching ?? this.isUserTouching,
+    );
+  }
+}
+
+/// 音字同步播放调度控制器
+class SyncPlayController extends ChangeNotifier {
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final List<TranscriptSegment> _segments = [];
+
+  SyncPlayerState _state = const SyncPlayerState(
+    playerState: PlayerState.stopped,
+    positionMs: 0,
+    durationMs: 0,
+    activeSegmentIndex: -1,
+  );
+
+  SyncPlayerState get state => _state;
+  List<TranscriptSegment> get segments => List.unmodifiable(_segments);
+
+  StreamSubscription? _posSub;
+  StreamSubscription? _durationSub;
+  StreamSubscription? _stateSub;
+
+  SyncPlayController() {
+    _initSubscriptions();
+  }
+
+  void _initSubscriptions() {
+    _stateSub = _audioPlayer.onPlayerStateChanged.listen((pState) {
+      _state = _state.copyWith(playerState: pState);
+      notifyListeners();
+    });
+
+    _durationSub = _audioPlayer.onDurationChanged.listen((dur) {
+      _state = _state.copyWith(durationMs: dur.inMilliseconds);
+      notifyListeners();
+    });
+
+    _posSub = _audioPlayer.onPositionChanged.listen((pos) {
+      final posMs = pos.inMilliseconds;
+      final activeIndex = BinarySearchUtil.findActiveIndex(_segments, posMs);
+
+      if (_state.positionMs != posMs || _state.activeSegmentIndex != activeIndex) {
+        _state = _state.copyWith(
+          positionMs: posMs,
+          activeSegmentIndex: activeIndex,
+        );
+        notifyListeners();
+      }
+    });
+  }
+
+  /// 加载任务与其分段
+  void loadTask({
+    required String audioPath,
+    required List<TranscriptSegment> segments,
+  }) {
+    _segments.clear();
+    _segments.addAll(segments);
+    // 按起始时间排序
+    _segments.sort((a, b) => a.startMs.compareTo(b.startMs));
+
+    final totalDuration = segments.isNotEmpty ? segments.last.endMs : 0;
+    _state = _state.copyWith(
+      durationMs: totalDuration,
+      positionMs: 0,
+      activeSegmentIndex: _segments.isNotEmpty ? 0 : -1,
+    );
+
+    // 设置数据源
+    _audioPlayer.setSource(DeviceFileSource(audioPath));
+    notifyListeners();
+  }
+
+  /// 播放/暂停切换
+  Future<void> togglePlay() async {
+    if (_state.isPlaying) {
+      await _audioPlayer.pause();
+    } else {
+      await _audioPlayer.resume();
+    }
+  }
+
+  /// 跳转至指定毫秒时间戳 (Seek)
+  Future<void> seek(int targetMs) async {
+    final clamped = targetMs.clamp(0, _state.durationMs > 0 ? _state.durationMs : targetMs);
+    await _audioPlayer.seek(Duration(milliseconds: clamped));
+    final activeIndex = BinarySearchUtil.findActiveIndex(_segments, clamped);
+    _state = _state.copyWith(
+      positionMs: clamped,
+      activeSegmentIndex: activeIndex,
+    );
+    notifyListeners();
+  }
+
+  /// 跳转到特定段落发音起点
+  Future<void> seekToSegment(int segmentIndex) async {
+    if (segmentIndex < 0 || segmentIndex >= _segments.length) return;
+    await seek(_segments[segmentIndex].startMs);
+  }
+
+  /// 调整播放倍速
+  Future<void> setPlaybackRate(double rate) async {
+    await _audioPlayer.setPlaybackRate(rate);
+    _state = _state.copyWith(playbackRate: rate);
+    notifyListeners();
+  }
+
+  /// 用户开始/结束手动滚动 (防止播放滚动动画抢占)
+  void setUserTouching(bool isTouching) {
+    if (_state.isUserTouching != isTouching) {
+      _state = _state.copyWith(isUserTouching: isTouching);
+      notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    _durationSub?.cancel();
+    _stateSub?.cancel();
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+}

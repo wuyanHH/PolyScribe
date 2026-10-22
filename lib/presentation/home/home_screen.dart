@@ -5,6 +5,8 @@ import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../engine/model_manager.dart';
 import '../../services/server/http_server.dart';
+import '../batch/batch_import_screen.dart';
+import '../player/sync_player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -232,9 +234,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.queue_music_rounded,
             color: AppColors.speakerPalette[2].color,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('录音批处理队列已就绪 (阶段二功能)')),
-              );
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const BatchImportScreen()),
+              ).then((_) => _bootstrap());
             },
           ),
         ),
@@ -329,41 +331,52 @@ class _HomeScreenState extends State<HomeScreen> {
             separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
               final task = _tasks[index];
-              return Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      task.sourceType == TaskSourceType.liveMeeting
-                          ? Icons.mic
-                          : Icons.audio_file,
-                      color: AppColors.primary,
+              return InkWell(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => SyncPlayerScreen(task: task),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            task.title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '时长: ${task.durationMs ~/ 1000}秒 • 状态: ${task.status.value}',
-                            style: const TextStyle(color: Colors.grey, fontSize: 12),
-                          ),
-                        ],
+                  ).then((_) => _bootstrap());
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        task.sourceType == TaskSourceType.liveMeeting
+                            ? Icons.mic
+                            : Icons.audio_file,
+                        color: AppColors.primary,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              task.title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '时长: ${task.durationMs ~/ 1000}秒 • 状态: ${task.status.value}',
+                              style: const TextStyle(color: Colors.grey, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, color: Colors.grey, size: 18),
+                    ],
+                  ),
                 ),
               );
             },

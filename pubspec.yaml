@@ -45,6 +45,8 @@ dependencies:
   web_socket_channel: ^3.0.3
   crypto: ^3.0.7
   sherpa_onnx: ^1.13.8
+  audioplayers: ^6.8.1
+  file_picker: ^13.1.0
 
 dev_dependencies:
   flutter_test:
