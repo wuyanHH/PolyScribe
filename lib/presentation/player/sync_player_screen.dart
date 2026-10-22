@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../data/models/transcript_segment.dart';
+import '../../services/export_center_service.dart';
 import '../../services/sync_play_controller.dart';
 
 /// 音字同步播放详情页
@@ -65,6 +67,54 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     });
   }
 
+  void _showExportDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '多格式生产力导出中心',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                ),
+                const SizedBox(height: 12),
+                ...ExportFormat.values.map((format) {
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.description_outlined, color: AppColors.primary),
+                    title: Text(format.label, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                    trailing: const Icon(Icons.copy_rounded, size: 18, color: Colors.grey),
+                    onTap: () {
+                      final content = ExportCenterService.formatContent(
+                        task: widget.task,
+                        segments: _controller.segments,
+                        format: format,
+                      );
+                      Clipboard.setData(ClipboardData(text: content));
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('${format.label} 内容已复制到剪贴板')),
+                      );
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _controller.removeListener(_onPlayerStateChanged);
@@ -88,6 +138,11 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            tooltip: '生产力导出中心',
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: _showExportDialog,
+          ),
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
             onPressed: () {
