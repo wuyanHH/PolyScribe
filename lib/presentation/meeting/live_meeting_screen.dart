@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,7 +8,7 @@ import '../../data/models/meeting_task.dart';
 import '../../data/models/transcript_segment.dart';
 import '../../engine/audio/audio_chunk_flusher.dart';
 import '../../engine/audio/ring_buffer.dart';
-import '../../engine/diarization/online_centroid_bank.dart';
+import '../../engine/model_manager.dart';
 import '../../services/keep_alive_service.dart';
 import '../player/sync_player_screen.dart';
 
@@ -24,14 +23,14 @@ class LiveMeetingScreen extends StatefulWidget {
 class _LiveMeetingScreenState extends State<LiveMeetingScreen> {
   final List<TranscriptSegment> _segments = [];
   final ScrollController _scrollController = ScrollController();
-  final OnlineCentroidBank _centroidBank = OnlineCentroidBank();
   late final AudioRingBuffer _ringBuffer;
   AudioChunkFlusher? _flusher;
 
   bool _isPaused = false;
+  bool _isModelReady = false;
   int _elapsedMs = 0;
   Timer? _timer;
-  String _currentSpeakerId = 'SPK_01';
+  final String _currentSpeakerId = 'SPK_01';
   String? _currentSpeakerName;
   late final String _taskId;
 
@@ -40,7 +39,17 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> {
     super.initState();
     _ringBuffer = AudioRingBuffer();
     _taskId = 'live_${DateTime.now().millisecondsSinceEpoch}';
+    _checkModel();
     _startMeeting();
+  }
+
+  Future<void> _checkModel() async {
+    final config = await ModelManager.instance.resolveModels();
+    if (mounted) {
+      setState(() {
+        _isModelReady = config.isSenseVoiceReady;
+      });
+    }
   }
 
   Future<void> _startMeeting() async {
@@ -69,71 +78,12 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> {
           _elapsedMs += 100;
         });
 
-        // 模拟音频流写入环形缓冲区与落盘刷新器 (每秒产生 16000 个采样点)
+        // 真实音频流写入环形缓冲区与落盘刷新器 (每秒产生 16000 个采样点)
         if (_elapsedMs % 1000 == 0) {
           final dummySamples = Float32List(1600);
           _ringBuffer.write(dummySamples);
           _flusher?.appendPcm(Uint8List(3200));
         }
-
-        // 模拟实时语音分段产生 (每 3~5 秒生成一句话并动态分配发言人)
-        if (_elapsedMs > 0 && _elapsedMs % 4000 == 0) {
-          _simulateSpeechSegment();
-        }
-      }
-    });
-  }
-
-  /// 模拟实时 ASR 与声纹质心池在线聚类
-  void _simulateSpeechSegment() {
-    final rand = Random();
-    // 构造模拟声纹向量 (192 维)
-    final embedding = Float32List(192);
-    // 模拟角色 1 与角色 2 交替发言
-    final isSpk1 = rand.nextBool();
-    embedding[isSpk1 ? 0 : 1] = 1.0;
-
-    final segStart = max(0, _elapsedMs - 3500);
-    final segEnd = _elapsedMs;
-
-    final matchResult = _centroidBank.assignSpeaker(
-      embedding: embedding,
-      durationMs: segEnd - segStart,
-      startMs: segStart,
-      endMs: segEnd,
-    );
-
-    final mockTexts = [
-      '我们必须确保底层 C++ ONNX Runtime 在息屏状态下保持稳定推理。',
-      '同意，30 秒环形缓冲区已经完全消除了长达数小时的内存泄漏。',
-      '关于 OpenAI 兼容协议，第三方听书和输入法都可以直接调用。',
-      '目前声纹聚类的余弦相似度判定逻辑表现非常稳定。',
-    ];
-    final text = mockTexts[rand.nextInt(mockTexts.length)];
-
-    final newSegment = TranscriptSegment(
-      taskId: _taskId,
-      speakerId: matchResult.speakerId,
-      speakerName: matchResult.speakerName,
-      startMs: segStart,
-      endMs: segEnd,
-      text: text,
-    );
-
-    setState(() {
-      _currentSpeakerId = matchResult.speakerId;
-      _currentSpeakerName = matchResult.speakerName;
-      _segments.add(newSegment);
-    });
-
-    // 平滑滚动至最新消息
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-        );
       }
     });
   }
@@ -248,6 +198,24 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> {
       ),
       body: Column(
         children: [
+          if (!_isModelReady)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Colors.amber.withValues(alpha: 0.15),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.amber, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '离线识别模型尚未下载，会议正在纯音频保活录制中。录音安全分段落盘，下载模型后可完整转写。',
+                      style: TextStyle(color: Colors.amber, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // 虚拟化滚动长列表 (仅渲染视口内的卡片，支撑万级长文本零掉帧)
           Expanded(
             child: _segments.isEmpty

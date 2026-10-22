@@ -73,4 +73,15 @@ class KeepAliveService {
       }
     }
   }
+
+  /// 请求电池白名单无限制策略
+  Future<void> requestIgnoreBatteryOptimizations() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('requestIgnoreBatteryOptimizations');
+      } catch (e) {
+        debugPrint('[KeepAliveService] 请求忽略电池优化失败: $e');
+      }
+    }
+  }
 }

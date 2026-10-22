@@ -7,6 +7,9 @@ import '../data/database/app_database.dart';
 import '../data/models/meeting_task.dart';
 import '../data/models/transcript_segment.dart';
 import '../engine/diarization/dual_channel_detector.dart';
+import '../engine/isolate/inference_worker.dart';
+import '../engine/isolate/worker_message.dart';
+import '../engine/model_manager.dart';
 
 /// 任务处理进度事件
 class TaskProgressEvent {
@@ -37,6 +40,9 @@ class TaskQueueService {
       StreamController<TaskProgressEvent>.broadcast();
 
   Stream<TaskProgressEvent> get onProgress => _progressController.stream;
+
+  /// 可选自定义转写处理器 (用于单元测试或自定义引擎注入)
+  Future<List<TranscriptSegment>> Function(MeetingTask task, bool isStereoSeparated)? mockTranscriber;
 
   /// 添加音频任务到批处理队列
   Future<MeetingTask> enqueueAudioFile(String filePath, {String? customTitle}) async {
@@ -94,6 +100,15 @@ class TaskQueueService {
       await _executeTask(task);
     } catch (e, stack) {
       debugPrint('[TaskQueueService] 任务执行异常: $e\n$stack');
+      try {
+        final currentTask = await AppDatabase.instance.getTask(taskId);
+        if (currentTask != null) {
+          await AppDatabase.instance.saveTask(currentTask.copyWith(status: TaskStatus.error));
+        }
+      } catch (dbErr) {
+        debugPrint('[TaskQueueService] 更新数据库任务错误状态异常: $dbErr');
+      }
+
       _progressController.add(TaskProgressEvent(
         taskId: taskId,
         progress: 1.0,
@@ -179,81 +194,70 @@ class TaskQueueService {
     return int16;
   }
 
-  /// 分段转写生成器
+  /// 分段转写生成器 (真实调用本地 ONNX 引擎与声纹聚类，杜绝任何硬编码测试数据)
   Future<List<TranscriptSegment>> _transcribeAudioSegments(
     MeetingTask task,
     bool isStereoSeparated,
   ) async {
+    // 若设置了注入转写器 (如单元测试环境)，优先委托处理
+    if (mockTranscriber != null) {
+      return await mockTranscriber!(task, isStereoSeparated);
+    }
+
+    final modelConfig = await ModelManager.instance.resolveModels();
+    if (!modelConfig.isSenseVoiceReady) {
+      throw Exception('SenseVoice 语音识别模型未就绪，请前往系统设置下载模型后重试');
+    }
+
+    final worker = InferenceWorkerCoordinator.instance;
+    await worker.initialize(modelConfig);
+
+    final file = File(task.audioPath);
+    final pcmSamples = _tryExtractInt16Pcm(await file.readAsBytes());
+    if (pcmSamples.isEmpty) {
+      return [];
+    }
+
+    final float32Samples = Float32List(pcmSamples.length);
+    for (int i = 0; i < pcmSamples.length; i++) {
+      float32Samples[i] = pcmSamples[i] / 32768.0;
+    }
+
+    const sampleRate = 16000;
+    const chunkSize = sampleRate * 3; // 3 秒切片
     final segments = <TranscriptSegment>[];
 
-    if (isStereoSeparated) {
-      // 物理双声道直接解耦为 我方 (SPK_01) 与 对方 (SPK_02)
-      segments.add(TranscriptSegment(
+    int chunkIndex = 0;
+    for (int offset = 0; offset < float32Samples.length; offset += chunkSize) {
+      final end = (offset + chunkSize < float32Samples.length)
+          ? offset + chunkSize
+          : float32Samples.length;
+      if (end - offset < sampleRate * 0.5) break;
+
+      final slice = float32Samples.sublist(offset, end);
+      final startMs = (offset / sampleRate * 1000).toInt();
+      final endMs = (end / sampleRate * 1000).toInt();
+
+      final res = await worker.transcribeChunk(TranscribeChunkCommand(
+        messageId: 'chunk_${task.id}_$chunkIndex',
         taskId: task.id,
-        speakerId: 'SPK_01',
-        speakerName: '我方发言',
-        startMs: 500,
-        endMs: 3500,
-        text: '您好，这里是 PolyScribe 业务支持。请问本次通话有何需求？',
-        words: const [
-          WordTimestamp(word: '您好', startMs: 500, endMs: 800),
-          WordTimestamp(word: '这里是', startMs: 850, endMs: 1200),
-          WordTimestamp(word: '业务支持', startMs: 1300, endMs: 2200),
-          WordTimestamp(word: '有何需求', startMs: 2300, endMs: 3500),
-        ],
+        chunkIndex: chunkIndex,
+        startMs: startMs,
+        endMs: endMs,
+        samples: slice,
       ));
 
-      segments.add(TranscriptSegment(
-        taskId: task.id,
-        speakerId: 'SPK_02',
-        speakerName: '对方客户',
-        startMs: 4000,
-        endMs: 7800,
-        text: '我想确认一下离线语音识别在没有外网环境下的响应速度。',
-        words: const [
-          WordTimestamp(word: '确认一下', startMs: 4000, endMs: 4800),
-          WordTimestamp(word: '离线语音识别', startMs: 4900, endMs: 6200),
-          WordTimestamp(word: '响应速度', startMs: 6300, endMs: 7800),
-        ],
-      ));
-
-      segments.add(TranscriptSegment(
-        taskId: task.id,
-        speakerId: 'SPK_01',
-        speakerName: '我方发言',
-        startMs: 8200,
-        endMs: 12500,
-        text: 'SenseVoice-Small 模型在移动端 ARM64 平台 RTF 约为 0.05，即 10 秒语音 0.5 秒内完成识别。',
-        words: const [
-          WordTimestamp(word: '模型', startMs: 8200, endMs: 8800),
-          WordTimestamp(word: '移动端', startMs: 8900, endMs: 9500),
-          WordTimestamp(word: '极速完成', startMs: 9600, endMs: 12500),
-        ],
-      ));
-    } else {
-      // 单声道音频智能聚类段落
-      segments.add(TranscriptSegment(
-        taskId: task.id,
-        speakerId: 'SPK_01',
-        speakerName: '主讲人',
-        startMs: 300,
-        endMs: 4200,
-        text: '各位同事，今天召开关于端侧模型架构的实施对齐会议。',
-        words: const [
-          WordTimestamp(word: '各位同事', startMs: 300, endMs: 1000),
-          WordTimestamp(word: '架构对齐', startMs: 1200, endMs: 2500),
-          WordTimestamp(word: '会议', startMs: 2800, endMs: 4200),
-        ],
-      ));
-
-      segments.add(TranscriptSegment(
-        taskId: task.id,
-        speakerId: 'SPK_02',
-        speakerName: '参会嘉宾',
-        startMs: 4800,
-        endMs: 8500,
-        text: '目前内存控制与 30 秒环形缓冲区的机制已经测试完毕，无内存泄漏隐患。',
-      ));
+      if (res != null && res.isSuccess && res.text.trim().isNotEmpty) {
+        segments.add(TranscriptSegment(
+          taskId: task.id,
+          speakerId: res.speakerId,
+          speakerName: res.speakerName,
+          startMs: startMs,
+          endMs: endMs,
+          text: res.text.trim(),
+        ));
+      }
+      chunkIndex++;
     }
 
     return segments;

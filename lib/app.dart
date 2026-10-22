@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/app_colors.dart';
 import 'core/constants/app_constants.dart';
-import 'presentation/home/home_screen.dart';
+import 'presentation/main_navigation_screen.dart';
 
 /// PolyScribe 根应用组件
 class PolyScribeApp extends StatelessWidget {
@@ -30,7 +30,7 @@ class PolyScribeApp extends StatelessWidget {
           ),
           useMaterial3: true,
         ),
-        home: const HomeScreen(),
+        home: const MainNavigationScreen(),
       ),
     );
   }

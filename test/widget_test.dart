@@ -12,10 +12,11 @@ void main() {
     await tester.pumpWidget(const PolyScribeApp());
     // 渲染第一帧
     await tester.pump();
-    // 推进异步初始化
+    // 推进异步初始化与数据加载
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('声织'), findsOneWidget);
-    expect(find.text('声织纪要'), findsOneWidget);
+    // 验证品牌标识与主页标题
+    expect(find.text('声织'), findsAtLeastNWidgets(1));
+    expect(find.text('纪要与转写历史'), findsOneWidget);
   });
 }

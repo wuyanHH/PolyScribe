@@ -159,6 +159,16 @@ class LocalHttpServer {
     // 注入中间件：跨域 CORS 与统一 Server 标识头
     final handler = const Pipeline()
         .addMiddleware((innerHandler) => (request) async {
+              // 拦截浏览器 CORS OPTIONS 预检请求直接放行
+              if (request.method == 'OPTIONS') {
+                return Response.ok('', headers: {
+                  'Server': AppConstants.serverIdentifier,
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                  'Access-Control-Allow-Headers': 'Origin, Content-Type, Accept, Authorization',
+                });
+              }
+
               final response = await innerHandler(request);
               return response.change(headers: {
                 'Server': AppConstants.serverIdentifier,

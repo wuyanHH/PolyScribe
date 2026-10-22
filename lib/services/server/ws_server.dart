@@ -36,16 +36,14 @@ class LocalWsServer {
               final result = await onChunk!(message);
               webSocket.sink.add(jsonEncode(result));
             } else {
-              // 模拟即时回执响应
-              final mockResponse = {
-                'is_final': true,
-                'speaker': '主讲人',
-                'speaker_id': 'SPK_01',
-                'start_ms': 0,
-                'end_ms': 1000,
-                'text': '流式语音识别响应正常',
+              // 基础帧接收成功回执
+              final ackResponse = {
+                'is_final': false,
+                'status': 'received',
+                'bytes': message.length,
+                'timestamp': DateTime.now().millisecondsSinceEpoch,
               };
-              webSocket.sink.add(jsonEncode(mockResponse));
+              webSocket.sink.add(jsonEncode(ackResponse));
             }
           } else if (message is String) {
             // 控制消息 (如 ping/pong 或心跳)

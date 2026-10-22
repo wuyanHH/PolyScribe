@@ -93,3 +93,21 @@ class MeetingTask {
     );
   }
 }
+
+/// 会议纪要统计与元数据概要
+class TaskSummaryInfo {
+  final int segmentCount;
+  final int totalWordCount;
+  final List<String> speakers;
+  final String firstSnippet;
+  final bool isAudioFileExists;
+
+  const TaskSummaryInfo({
+    required this.segmentCount,
+    required this.totalWordCount,
+    required this.speakers,
+    required this.firstSnippet,
+    required this.isAudioFileExists,
+  });
+}
+

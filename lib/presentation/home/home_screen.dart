@@ -1,17 +1,23 @@
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
-import '../../engine/model_manager.dart';
-import '../../services/server/http_server.dart';
-import '../batch/batch_import_screen.dart';
-import '../meeting/live_meeting_screen.dart';
+import '../../services/task_queue_service.dart';
 import '../player/sync_player_screen.dart';
-import '../server/server_console_screen.dart';
 
+/// 纪要与历史记录主界面
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final VoidCallback? onNavigateToMeeting;
+  final VoidCallback? onNavigateToBatch;
+
+  const HomeScreen({
+    super.key,
+    this.onNavigateToMeeting,
+    this.onNavigateToBatch,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -19,48 +25,95 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<MeetingTask> _tasks = [];
+  Map<String, TaskSummaryInfo> _summaryMap = {};
   bool _isLoading = true;
-  bool _isServerRunning = false;
-  LocalHttpServer? _localHttpServer;
-  ModelConfig? _modelConfig;
+  String _searchQuery = '';
+  String _selectedFilter = 'all'; // all, live, imported, audio_missing
 
   @override
   void initState() {
     super.initState();
-    _bootstrap();
+    _loadAllTasks();
   }
 
-  Future<void> _bootstrap() async {
-    // 1. 初始化数据库与检测本地模型
-    final config = await ModelManager.instance.resolveModels();
+  Future<void> _loadAllTasks() async {
     final tasks = await AppDatabase.instance.getAllTasks();
+    // 批量聚合查询，消除逐行遍历引起的 N+1 数据库慢查询
+    final summaries = await AppDatabase.instance.getBatchTasksSummaryMap(tasks);
 
-    setState(() {
-      _modelConfig = config;
-      _tasks = tasks;
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _toggleServer() async {
-    if (_isServerRunning) {
-      await _localHttpServer?.stop();
+    if (mounted) {
       setState(() {
-        _isServerRunning = false;
-      });
-    } else {
-      _localHttpServer = LocalHttpServer(
-        port: AppConstants.defaultServerPort,
-      );
-      await _localHttpServer!.start();
-      setState(() {
-        _isServerRunning = true;
+        _tasks = tasks;
+        _summaryMap = summaries;
+        _isLoading = false;
       });
     }
   }
 
+  /// 单音频文件选取并直接开启转写
+  Future<void> _pickSingleAudioAndTranscribe() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'opus', 'amr', 'flac', 'ogg'],
+      );
+
+      if (result.isNotEmpty) {
+        final path = result.first.path;
+        if (path != null) {
+          final task = await TaskQueueService.instance.enqueueAudioFile(path);
+          await _loadAllTasks();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('已添加「${task.title}」并启动转写，转写完成后可直接点击查看')),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('选择文件失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// 过滤后的任务列表
+  List<MeetingTask> get _filteredTasks {
+    return _tasks.where((task) {
+      final summary = _summaryMap[task.id];
+
+      // 1. 分类筛选
+      if (_selectedFilter == 'live' && task.sourceType != TaskSourceType.liveMeeting) {
+        return false;
+      }
+      if (_selectedFilter == 'imported' && task.sourceType != TaskSourceType.importedAudio) {
+        return false;
+      }
+      if (_selectedFilter == 'audio_missing' && (summary?.isAudioFileExists ?? true)) {
+        return false;
+      }
+
+      // 2. 搜索过滤
+      if (_searchQuery.trim().isNotEmpty) {
+        final q = _searchQuery.trim().toLowerCase();
+        final titleMatch = task.title.toLowerCase().contains(q);
+        final snippetMatch = summary?.firstSnippet.toLowerCase().contains(q) ?? false;
+        final speakerMatch = summary?.speakers.any((s) => s.toLowerCase().contains(q)) ?? false;
+        if (!titleMatch && !snippetMatch && !speakerMatch) {
+          return false;
+        }
+      }
+
+      return true;
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final list = _filteredTasks;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -76,197 +129,164 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: const Text(
                 AppConstants.appShortName,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: Colors.white,
-                ),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             const Text(
-              AppConstants.appFullName,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              '纪要与转写历史',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
           ],
         ),
         actions: [
           IconButton(
-            tooltip: '本地 STT 转发服务控制台',
-            icon: Icon(
-              Icons.wifi_tethering,
-              color: _isServerRunning ? AppColors.speakerPalette[1].color : Colors.grey,
-            ),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ServerConsoleScreen(
-                    server: _localHttpServer,
-                    onToggleServer: _toggleServer,
-                  ),
-                ),
-              );
-            },
+            tooltip: '刷新',
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: _loadAllTasks,
           ),
-          const SizedBox(width: 8),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.audio_file_rounded),
+        label: const Text('选择单音频直接转写', style: TextStyle(fontWeight: FontWeight.bold)),
+        onPressed: _pickSingleAudioAndTranscribe,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildEngineStatusCard(),
-                  const SizedBox(height: 20),
-                  _buildQuickActionCards(),
-                  const SizedBox(height: 24),
-                  _buildRecentTasksSection(),
-                ],
-              ),
+          : Column(
+              children: [
+                _buildSearchBar(),
+                _buildFilterChips(),
+                Expanded(
+                  child: list.isEmpty
+                      ? _buildEmptyState()
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+                          itemCount: list.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final task = list[index];
+                            final summary = _summaryMap[task.id];
+                            return _buildTaskCard(task, summary);
+                          },
+                        ),
+                ),
+              ],
             ),
     );
   }
 
-  /// 状态看板卡片
-  Widget _buildEngineStatusCard() {
-    final isVadReady = _modelConfig?.isVadReady ?? false;
-    final isAsrReady = _modelConfig?.isSenseVoiceReady ?? false;
+  Widget _buildSearchBar() {
+    return Container(
+      color: AppColors.surface,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: TextField(
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          hintText: '搜索会议标题、发言人或发言片段 (FTS5)...',
+          hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+          prefixIcon: const Icon(Icons.search, color: AppColors.primary, size: 20),
+          filled: true,
+          fillColor: AppColors.background,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide.none,
+          ),
+        ),
+        onChanged: (val) {
+          setState(() {
+            _searchQuery = val;
+          });
+        },
+      ),
+    );
+  }
+
+  Widget _buildFilterChips() {
+    final chips = [
+      {'key': 'all', 'label': '全部 (${_tasks.length})'},
+      {'key': 'live', 'label': '实时会议'},
+      {'key': 'imported', 'label': '导入音频'},
+      {'key': 'audio_missing', 'label': '⚠️ 音频已删'},
+    ];
 
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.surfaceLight),
+      color: AppColors.surface,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: chips.map((c) {
+            final isSelected = _selectedFilter == c['key'];
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(c['label']!),
+                selected: isSelected,
+                selectedColor: AppColors.primary,
+                backgroundColor: AppColors.background,
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.white : Colors.grey,
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+                onSelected: (val) {
+                  if (val) {
+                    setState(() => _selectedFilter = c['key']!);
+                  }
+                },
+              ),
+            );
+          }).toList(),
+        ),
       ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                '端侧引擎状态',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _isServerRunning
-                      ? AppColors.speakerPalette[1].surfaceColor
-                      : Colors.white10,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _isServerRunning
-                      ? 'HTTP :${AppConstants.defaultServerPort} 运行中'
-                      : '服务待机',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _isServerRunning
-                        ? AppColors.speakerPalette[1].color
-                        : Colors.grey,
-                  ),
-                ),
-              ),
-            ],
-          ),
+          Icon(Icons.notes_rounded, size: 56, color: Colors.grey.withValues(alpha: 0.4)),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              _buildStatusPill('Silero-VAD v5', isVadReady),
-              const SizedBox(width: 8),
-              _buildStatusPill('SenseVoice-Small', isAsrReady),
-              const SizedBox(width: 8),
-              _buildStatusPill('CAM++ 声纹聚类', isVadReady),
-            ],
+          const Text(
+            '暂无符合条件的纪要记录',
+            style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '点击右下角按钮直接选择单个音频，或切换到实时长会议开始录音',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatusPill(String name, bool ready) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: ready ? const Color(0x2610B981) : const Color(0x26EF4444),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            ready ? Icons.check_circle : Icons.circle_outlined,
-            size: 12,
-            color: ready ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            name,
-            style: TextStyle(
-              fontSize: 11,
-              color: ready ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildTaskCard(MeetingTask task, TaskSummaryInfo? summary) {
+    final isLive = task.sourceType == TaskSourceType.liveMeeting;
+    final hasAudio = summary?.isAudioFileExists ?? (task.audioPath.isNotEmpty && File(task.audioPath).existsSync());
+    final speakers = summary?.speakers ?? [];
+    final wordCount = summary?.totalWordCount ?? 0;
+    final snippet = summary?.firstSnippet ?? '';
 
-  /// 快捷入口卡片
-  Widget _buildQuickActionCards() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildActionTile(
-            title: '实时长会议',
-            subtitle: '多角色在线聚类 / 息屏保活',
-            icon: Icons.mic_rounded,
-            color: AppColors.primary,
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const LiveMeetingScreen()),
-              ).then((_) => _bootstrap());
-            },
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildActionTile(
-            title: '导入批处理',
-            subtitle: '通话录音 / 双声道物理预检',
-            icon: Icons.queue_music_rounded,
-            color: AppColors.speakerPalette[2].color,
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const BatchImportScreen()),
-              ).then((_) => _bootstrap());
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionTile({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
     return InkWell(
-      onTap: onTap,
       borderRadius: BorderRadius.circular(12),
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SyncPlayerScreen(task: task),
+          ),
+        );
+        _loadAllTasks();
+      },
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
@@ -275,124 +295,97 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
+            Row(
+              children: [
+                Icon(
+                  isLive ? Icons.mic_rounded : Icons.audio_file_rounded,
+                  color: isLive ? AppColors.primary : AppColors.speakerPalette[2].color,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    task.title,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.grey, size: 18),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // 元数据行
+            Row(
+              children: [
+                _buildTag('时长: ${task.durationMs ~/ 1000}秒'),
+                const SizedBox(width: 6),
+                _buildTag('共 $wordCount 字'),
+                const SizedBox(width: 6),
+                if (!hasAudio)
+                  _buildWarningTag('音频已删 (仅纪要)')
+                else
+                  _buildTag('物理音频正常', color: Colors.greenAccent),
+              ],
+            ),
+            if (speakers.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Text('发言人: ', style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Expanded(
+                    child: Text(
+                      speakers.join('、'),
+                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
-              child: Icon(icon, color: color, size: 24),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+            ],
+            if (snippet.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  snippet,
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: const TextStyle(fontSize: 11, color: Colors.grey),
-            ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  /// 历史纪要列表
-  Widget _buildRecentTasksSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          '会议纪要与转写记录',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_tasks.isEmpty)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Column(
-              children: [
-                Icon(Icons.notes_rounded, size: 40, color: Colors.grey),
-                SizedBox(height: 8),
-                Text('暂无会议记录，点击上方开启新会议或导入录音', style: TextStyle(color: Colors.grey)),
-              ],
-            ),
-          )
-        else
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _tasks.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final task = _tasks[index];
-              return InkWell(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => SyncPlayerScreen(task: task),
-                    ),
-                  ).then((_) => _bootstrap());
-                },
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        task.sourceType == TaskSourceType.liveMeeting
-                            ? Icons.mic
-                            : Icons.audio_file,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              task.title,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '时长: ${task.durationMs ~/ 1000}秒 • 状态: ${task.status.value}',
-                              style: const TextStyle(color: Colors.grey, fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right, color: Colors.grey, size: 18),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-      ],
+  Widget _buildTag(String text, {Color color = Colors.grey}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(text, style: TextStyle(color: color, fontSize: 10)),
+    );
+  }
+
+  Widget _buildWarningTag(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(text, style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold)),
     );
   }
 }

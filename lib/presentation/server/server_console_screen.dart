@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,13 +25,15 @@ class ServerConsoleScreen extends StatefulWidget {
 class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
   String _localIp = '127.0.0.1';
   List<ApiCallLog> _logs = [];
+  /// 日志流事件订阅句柄
+  StreamSubscription<ApiCallLog>? _logSubscription;
 
   @override
   void initState() {
     super.initState();
     _detectLocalIp();
     _logs = List.from(InferenceLockManager.instance.recentLogs);
-    InferenceLockManager.instance.onLogAdded.listen((log) {
+    _logSubscription = InferenceLockManager.instance.onLogAdded.listen((log) {
       if (mounted) {
         setState(() {
           _logs.insert(0, log);
@@ -38,6 +41,13 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
         });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    // 销毁时释放事件流监听，杜绝内存泄漏
+    _logSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _detectLocalIp() async {

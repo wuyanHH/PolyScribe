@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import '../core/utils/binary_search_util.dart';
@@ -47,6 +48,9 @@ class SyncPlayerState {
 class SyncPlayController extends ChangeNotifier {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final List<TranscriptSegment> _segments = [];
+  bool _isAudioAvailable = false;
+
+  bool get isAudioAvailable => _isAudioAvailable;
 
   SyncPlayerState _state = const SyncPlayerState(
     playerState: PlayerState.stopped,
@@ -108,13 +112,27 @@ class SyncPlayController extends ChangeNotifier {
       activeSegmentIndex: _segments.isNotEmpty ? 0 : -1,
     );
 
-    // 设置数据源
-    _audioPlayer.setSource(DeviceFileSource(audioPath));
+    // 检查本地物理音频是否存在 (若已删除则进入离线纯纪要模式)
+    final file = File(audioPath);
+    if (audioPath.isNotEmpty && file.existsSync()) {
+      try {
+        _isAudioAvailable = true;
+        _audioPlayer.setSource(DeviceFileSource(audioPath));
+      } catch (e) {
+        debugPrint('[SyncPlayController] 设置音频源失败: $e');
+        _isAudioAvailable = false;
+      }
+    } else {
+      _isAudioAvailable = false;
+      debugPrint('[SyncPlayController] 音频源文件不存在，启动纯纪要阅读降级模式: $audioPath');
+    }
+
     notifyListeners();
   }
 
   /// 播放/暂停切换
   Future<void> togglePlay() async {
+    if (!_isAudioAvailable) return;
     if (_state.isPlaying) {
       await _audioPlayer.pause();
     } else {
@@ -125,7 +143,13 @@ class SyncPlayController extends ChangeNotifier {
   /// 跳转至指定毫秒时间戳 (Seek)
   Future<void> seek(int targetMs) async {
     final clamped = targetMs.clamp(0, _state.durationMs > 0 ? _state.durationMs : targetMs);
-    await _audioPlayer.seek(Duration(milliseconds: clamped));
+    if (_isAudioAvailable) {
+      try {
+        await _audioPlayer.seek(Duration(milliseconds: clamped));
+      } catch (e) {
+        debugPrint('[SyncPlayController] Seek 异常: $e');
+      }
+    }
     final activeIndex = BinarySearchUtil.findActiveIndex(_segments, clamped);
     _state = _state.copyWith(
       positionMs: clamped,

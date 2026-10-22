@@ -1,14 +1,13 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../services/task_queue_service.dart';
 import '../player/sync_player_screen.dart';
 
-/// 录音多选批处理导入中心
+/// 录音文件转写中心 (单文件快速转写 + 批量多选队列)
 class BatchImportScreen extends StatefulWidget {
   const BatchImportScreen({super.key});
 
@@ -20,21 +19,28 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
   final Map<String, TaskProgressEvent> _progressMap = {};
   List<MeetingTask> _tasks = [];
   bool _isLoading = true;
+  StreamSubscription<TaskProgressEvent>? _progressSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadTasks();
-    TaskQueueService.instance.onProgress.listen((event) {
+    _progressSubscription = TaskQueueService.instance.onProgress.listen((event) {
       if (mounted) {
         setState(() {
           _progressMap[event.taskId] = event;
         });
-        if (event.status == TaskStatus.completed) {
+        if (event.status == TaskStatus.completed || event.status == TaskStatus.error) {
           _loadTasks();
         }
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _progressSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadTasks() async {
@@ -47,12 +53,41 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     }
   }
 
-  /// 选择外部录音文件
-  Future<void> _pickAudioFiles() async {
+  /// 选择单个音频并立即启动转写
+  Future<void> _pickSingleAudioFile() async {
     try {
       final files = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'opus', 'amr', 'ogg'],
+        allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'opus', 'amr', 'flac', 'ogg'],
+      );
+
+      if (files.isNotEmpty) {
+        final path = files.first.path;
+        if (path != null) {
+          final task = await TaskQueueService.instance.enqueueAudioFile(path);
+          _loadTasks();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('已添加「${task.title}」并开始离线转写...')),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('选择音频失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// 批量选择多个外部录音文件
+  Future<void> _pickMultipleAudioFiles() async {
+    try {
+      final files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'opus', 'amr', 'flac', 'ogg'],
       );
 
       if (files.isNotEmpty) {
@@ -64,6 +99,11 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
 
         await TaskQueueService.instance.enqueueMultipleFiles(paths);
         _loadTasks();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已成功加入 ${paths.length} 个音频文件到转写队列')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -74,20 +114,14 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     }
   }
 
-  /// 快速生成模拟测试通话录音 (用于真机或无测试录音时直接验证)
-  Future<void> _createMockCallRecording() async {
-    final dir = await getTemporaryDirectory();
-    final sampleFile = File('${dir.path}/mock_call_${DateTime.now().millisecondsSinceEpoch}.wav');
-
-    // 写入模拟立体声 PCM 音频头与数据 (4000 个采样点)
-    final pcmBytes = List<int>.generate(8000, (i) => i % 256);
-    await sampleFile.writeAsBytes(pcmBytes);
-
-    await TaskQueueService.instance.enqueueAudioFile(
-      sampleFile.path,
-      customTitle: '立体声双声道通话录音测试',
-    );
+  Future<void> _deleteTask(String taskId) async {
+    await AppDatabase.instance.deleteTask(taskId);
     _loadTasks();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('任务已清除')),
+      );
+    }
   }
 
   @override
@@ -96,7 +130,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
-        title: const Text('录音文件批处理队列', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('录音文件转写中心', style: TextStyle(fontWeight: FontWeight.bold)),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -106,22 +140,43 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _buildActionBar(),
-                  const SizedBox(height: 16),
-                  const Text(
-                    '任务处理队列与历史',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        '音频转写队列与历史',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Text(
+                        '共 ${_tasks.length} 个任务',
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   Expanded(
                     child: _tasks.isEmpty
-                        ? const Center(
-                            child: Text(
-                              '暂无导入任务，点击上方按钮选择录音或生成模拟通话',
-                              style: TextStyle(color: Colors.grey),
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.audio_file_outlined, size: 56, color: Colors.grey.withValues(alpha: 0.5)),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  '暂无转写任务',
+                                  style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  '点击上方按钮选取本地通话录音、采访音频或会议语音',
+                                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                                ),
+                              ],
                             ),
                           )
                         : ListView.separated(
@@ -144,6 +199,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     return Row(
       children: [
         Expanded(
+          flex: 3,
           child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
@@ -151,23 +207,25 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            icon: const Icon(Icons.file_upload_outlined),
-            label: const Text('多选导入录音'),
-            onPressed: _pickAudioFiles,
+            icon: const Icon(Icons.add_circle_outline_rounded),
+            label: const Text('单音频快速转写', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: _pickSingleAudioFile,
           ),
         ),
         const SizedBox(width: 12),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.surface,
-            foregroundColor: AppColors.speakerPalette[2].color,
-            side: BorderSide(color: AppColors.speakerPalette[2].color.withValues(alpha: 0.5)),
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        Expanded(
+          flex: 2,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white70,
+              side: const BorderSide(color: AppColors.surfaceLight),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.queue_music_rounded, size: 18),
+            label: const Text('批量导入'),
+            onPressed: _pickMultipleAudioFiles,
           ),
-          icon: const Icon(Icons.science_outlined),
-          label: const Text('模拟通话测试'),
-          onPressed: _createMockCallRecording,
         ),
       ],
     );
@@ -175,6 +233,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
 
   Widget _buildTaskCard(MeetingTask task, TaskProgressEvent? progress) {
     final isDone = task.status == TaskStatus.completed;
+    final isError = task.status == TaskStatus.error;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -182,7 +241,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDone ? AppColors.speakerPalette[1].color.withValues(alpha: 0.5) : AppColors.surfaceLight,
+          color: isDone
+              ? AppColors.speakerPalette[1].color.withValues(alpha: 0.5)
+              : (isError ? Colors.redAccent.withValues(alpha: 0.5) : AppColors.surfaceLight),
         ),
       ),
       child: Column(
@@ -191,8 +252,12 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
           Row(
             children: [
               Icon(
-                isDone ? Icons.check_circle_rounded : Icons.pending_rounded,
-                color: isDone ? AppColors.speakerPalette[1].color : AppColors.primary,
+                isDone
+                    ? Icons.check_circle_rounded
+                    : (isError ? Icons.error_outline_rounded : Icons.pending_rounded),
+                color: isDone
+                    ? AppColors.speakerPalette[1].color
+                    : (isError ? Colors.redAccent : AppColors.primary),
                 size: 20,
               ),
               const SizedBox(width: 8),
@@ -204,6 +269,8 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (isDone)
@@ -217,9 +284,14 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                       MaterialPageRoute(
                         builder: (_) => SyncPlayerScreen(task: task),
                       ),
-                    );
+                    ).then((_) => _loadTasks());
                   },
-                  child: const Text('打开音字详情 >'),
+                  child: const Text('查看纪要 >'),
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18, color: Colors.grey),
+                  onPressed: () => _deleteTask(task.id),
                 ),
             ],
           ),
@@ -230,19 +302,41 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               child: LinearProgressIndicator(
                 value: progress.progress,
                 backgroundColor: Colors.white10,
-                valueColor: const AlwaysStoppedAnimation(AppColors.primary),
+                valueColor: AlwaysStoppedAnimation(
+                  isError ? Colors.redAccent : AppColors.primary,
+                ),
                 minHeight: 6,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               progress.stageDescription,
-              style: const TextStyle(color: Colors.grey, fontSize: 11),
+              style: TextStyle(
+                color: isError ? Colors.redAccent : Colors.grey,
+                fontSize: 11,
+              ),
             ),
           ] else ...[
-            Text(
-              '音频时长: ${task.durationMs ~/ 1000}秒 • 状态: ${task.status.value}',
-              style: const TextStyle(color: Colors.grey, fontSize: 11),
+            Row(
+              children: [
+                Text(
+                  '时长: ${task.durationMs ~/ 1000}秒',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '状态: ${task.status.value}',
+                  style: TextStyle(
+                    color: isDone ? Colors.greenAccent : Colors.grey,
+                    fontSize: 12,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 16, color: Colors.grey),
+                  onPressed: () => _deleteTask(task.id),
+                ),
+              ],
             ),
           ],
         ],

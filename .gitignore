@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# 忽略发布安装包与二进制归档大文件 (仅文本日志与哈希入库)
+release/**/*.apk
+release/**/*.zip
+release/**/*.tar.gz
