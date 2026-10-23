@@ -325,10 +325,13 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  '状态: ${task.status.value}',
+                  '状态: ${task.status.label}',
                   style: TextStyle(
-                    color: isDone ? Colors.greenAccent : Colors.grey,
+                    color: isDone
+                        ? Colors.greenAccent
+                        : (isError ? Colors.redAccent : Colors.orangeAccent),
                     fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 const Spacer(),

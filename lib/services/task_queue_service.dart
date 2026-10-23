@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import '../data/database/app_database.dart';
 import '../data/models/meeting_task.dart';
 import '../data/models/transcript_segment.dart';
@@ -49,11 +52,29 @@ class TaskQueueService {
     final fileName = p.basenameWithoutExtension(filePath);
     final taskId = 'task_${DateTime.now().millisecondsSinceEpoch}_${_queue.length}';
 
+    // 1. 将原音频立即安全拷贝到应用的私有存储目录，杜绝原文件移动或删除导致丢失
+    String safeAudioPath = filePath;
+    try {
+      final sourceFile = File(filePath);
+      if (sourceFile.existsSync()) {
+        final appSupport = await getApplicationSupportDirectory();
+        final audioDir = Directory(p.join(appSupport.path, 'imported_audios'));
+        if (!audioDir.existsSync()) {
+          audioDir.createSync(recursive: true);
+        }
+        final destPath = p.join(audioDir.path, '${taskId}_${p.basename(filePath)}');
+        await sourceFile.copy(destPath);
+        safeAudioPath = destPath;
+      }
+    } catch (e) {
+      debugPrint('[TaskQueueService] 复制音频失败，使用原路径: $e');
+    }
+
     final task = MeetingTask(
       id: taskId,
       title: customTitle ?? fileName,
       sourceType: TaskSourceType.importedAudio,
-      audioPath: filePath,
+      audioPath: safeAudioPath,
       durationMs: 0,
       createdAt: DateTime.now().millisecondsSinceEpoch,
       status: TaskStatus.queued,
@@ -194,6 +215,22 @@ class TaskQueueService {
     return int16;
   }
 
+  /// 简易线性重采样为 16kHz
+  Float32List _resampleTo16k(Float32List input, int srcRate) {
+    if (srcRate == 16000 || input.isEmpty) return input;
+    final double ratio = srcRate / 16000.0;
+    final int targetLength = (input.length / ratio).floor();
+    final output = Float32List(targetLength);
+    for (int i = 0; i < targetLength; i++) {
+      final double srcIndex = i * ratio;
+      final int index0 = srcIndex.floor();
+      final int index1 = min(index0 + 1, input.length - 1);
+      final double fraction = srcIndex - index0;
+      output[i] = input[index0] * (1.0 - fraction) + input[index1] * fraction;
+    }
+    return output;
+  }
+
   /// 分段转写生成器 (真实调用本地 ONNX 引擎与声纹聚类，杜绝任何硬编码测试数据)
   Future<List<TranscriptSegment>> _transcribeAudioSegments(
     MeetingTask task,
@@ -213,18 +250,47 @@ class TaskQueueService {
     await worker.initialize(modelConfig);
 
     final file = File(task.audioPath);
-    final pcmSamples = _tryExtractInt16Pcm(await file.readAsBytes());
-    if (pcmSamples.isEmpty) {
-      return [];
+    if (!file.existsSync()) {
+      throw Exception('音频源文件不存在或无法访问: ${task.audioPath}');
     }
 
-    final float32Samples = Float32List(pcmSamples.length);
-    for (int i = 0; i < pcmSamples.length; i++) {
-      float32Samples[i] = pcmSamples[i] / 32768.0;
+    Float32List float32Samples = Float32List(0);
+    int sampleRate = 16000;
+
+    // 1. 优先使用 sherpa-onnx 原生 C++ 音频解码器解析 WAV
+    try {
+      final wave = sherpa.readWave(task.audioPath);
+      if (wave.samples.isNotEmpty) {
+        float32Samples = wave.samples;
+        sampleRate = wave.sampleRate;
+      }
+    } catch (e) {
+      debugPrint('[TaskQueueService] 原生 readWave 尝试异常，回退纯二进制分析: $e');
     }
 
-    const sampleRate = 16000;
-    const chunkSize = sampleRate * 3; // 3 秒切片
+    // 2. 若原生解码未提取到数据，尝试直接二进制 Int16 PCM 提取
+    if (float32Samples.isEmpty) {
+      final bytes = await file.readAsBytes();
+      final pcmSamples = _tryExtractInt16Pcm(bytes);
+      if (pcmSamples.isNotEmpty) {
+        float32Samples = Float32List(pcmSamples.length);
+        for (int i = 0; i < pcmSamples.length; i++) {
+          float32Samples[i] = pcmSamples[i] / 32768.0;
+        }
+      }
+    }
+
+    if (float32Samples.isEmpty) {
+      throw Exception('无法解析音频样本数据，请确认文件完整或尝试转换为标准 WAV 格式');
+    }
+
+    // 3. 对齐采样率为 16kHz
+    if (sampleRate > 0 && sampleRate != 16000) {
+      float32Samples = _resampleTo16k(float32Samples, sampleRate);
+    }
+
+    const targetSampleRate = 16000;
+    const chunkSize = targetSampleRate * 3; // 3 秒切片
     final segments = <TranscriptSegment>[];
 
     int chunkIndex = 0;
@@ -232,11 +298,11 @@ class TaskQueueService {
       final end = (offset + chunkSize < float32Samples.length)
           ? offset + chunkSize
           : float32Samples.length;
-      if (end - offset < sampleRate * 0.5) break;
+      if (end - offset < targetSampleRate * 0.5) break;
 
       final slice = float32Samples.sublist(offset, end);
-      final startMs = (offset / sampleRate * 1000).toInt();
-      final endMs = (end / sampleRate * 1000).toInt();
+      final startMs = (offset / targetSampleRate * 1000).toInt();
+      final endMs = (end / targetSampleRate * 1000).toInt();
 
       final res = await worker.transcribeChunk(TranscribeChunkCommand(
         messageId: 'chunk_${task.id}_$chunkIndex',
@@ -248,16 +314,23 @@ class TaskQueueService {
       ));
 
       if (res != null && res.isSuccess && res.text.trim().isNotEmpty) {
-        segments.add(TranscriptSegment(
-          taskId: task.id,
-          speakerId: res.speakerId,
-          speakerName: res.speakerName,
-          startMs: startMs,
-          endMs: endMs,
-          text: res.text.trim(),
-        ));
+        final text = res.text.trim();
+        if (text.length >= 2 || RegExp(r'[\u4e00-\u9fa5a-zA-Z0-9]').hasMatch(text)) {
+          segments.add(TranscriptSegment(
+            taskId: task.id,
+            speakerId: res.speakerId,
+            speakerName: res.speakerName,
+            startMs: startMs,
+            endMs: endMs,
+            text: text,
+          ));
+        }
       }
       chunkIndex++;
+    }
+
+    if (segments.isEmpty) {
+      throw Exception('音频已完整扫描，但未检测到有效的人声发言文本');
     }
 
     return segments;

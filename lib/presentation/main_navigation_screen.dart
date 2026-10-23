@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
 import '../core/constants/app_constants.dart';
 import '../services/server/http_server.dart';
-import 'batch/batch_import_screen.dart';
 import 'home/home_screen.dart';
 import 'meeting/live_meeting_screen.dart';
 import 'settings/settings_screen.dart';
@@ -31,10 +30,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _cachedPages = [
       HomeScreen(
         onNavigateToMeeting: () => setState(() => _currentIndex = 1),
-        onNavigateToBatch: () => setState(() => _currentIndex = 2),
       ),
       const LiveMeetingScreen(),
-      const BatchImportScreen(),
       const VoiceprintVaultScreen(),
       SettingsScreen(
         localHttpServer: _localHttpServer,
@@ -119,17 +116,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 NavigationRailDestination(
                   icon: Icon(Icons.notes_rounded),
                   selectedIcon: Icon(Icons.notes_rounded),
-                  label: Text('纪要记录'),
+                  label: Text('纪要库'),
                 ),
                 NavigationRailDestination(
                   icon: Icon(Icons.mic_rounded),
                   selectedIcon: Icon(Icons.mic_rounded),
                   label: Text('实时会议'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.queue_music_rounded),
-                  selectedIcon: Icon(Icons.queue_music_rounded),
-                  label: Text('转写中心'),
                 ),
                 NavigationRailDestination(
                   icon: Icon(Icons.fingerprint_rounded),
@@ -184,15 +176,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.notes_rounded),
-              label: '记录',
+              label: '纪要',
             ),
             NavigationDestination(
               icon: Icon(Icons.mic_rounded),
               label: '会议',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.queue_music_rounded),
-              label: '转写',
             ),
             NavigationDestination(
               icon: Icon(Icons.fingerprint_rounded),

@@ -25,6 +25,21 @@ enum TaskStatus {
   final String value;
   const TaskStatus(this.value);
 
+  String get label {
+    switch (this) {
+      case TaskStatus.recording:
+        return '正在录音';
+      case TaskStatus.queued:
+        return '排队中';
+      case TaskStatus.processing:
+        return '转写中';
+      case TaskStatus.completed:
+        return '已完成';
+      case TaskStatus.error:
+        return '转写失败';
+    }
+  }
+
   static TaskStatus fromString(String val) {
     return TaskStatus.values.firstWhere(
       (e) => e.value == val,
