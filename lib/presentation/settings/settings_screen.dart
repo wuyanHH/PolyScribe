@@ -1,9 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/theme/app_theme_provider.dart';
+import '../../core/utils/app_toast.dart';
 import '../../data/database/app_database.dart';
 import '../../engine/model_manager.dart';
 import '../../services/keep_alive_service.dart';
@@ -12,7 +15,7 @@ import '../models/model_manager_screen.dart';
 import '../server/server_console_screen.dart';
 
 /// 系统中枢与偏好设置页面 (深度现代化重构 / 桌面端居中自适应 / 精致微质感卡片)
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   final LocalHttpServer? localHttpServer;
   final VoidCallback? onToggleServer;
 
@@ -23,10 +26,10 @@ class SettingsScreen extends StatefulWidget {
   });
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   ModelConfig? _modelConfig;
   double _vadSilenceThreshold = 0.8;
   bool _enableDriftSuppression = true;
@@ -72,24 +75,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await db.execute('VACUUM');
       await _loadSettingsData();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: AppColors.surfaceElevated,
-            content: Row(
-              children: [
-                Icon(Icons.check_circle_rounded, color: AppColors.emerald, size: 20),
-                SizedBox(width: 10),
-                Text('SQLite 数据库紧缩与索引碎片清理完成', style: TextStyle(color: Colors.white)),
-              ],
-            ),
-          ),
-        );
+        AppToast.success(context, 'SQLite 数据库紧缩与索引碎片清理完成');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('优化失败: $e')),
-        );
+        AppToast.error(context, '优化失败: $e');
       }
     } finally {
       if (mounted) {
@@ -111,6 +101,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isAsrReady = _modelConfig?.isSenseVoiceReady ?? false;
     final allModelsReady = isVadReady && isAsrReady;
     final isServerRunning = widget.localHttpServer?.isRunning ?? false;
+    final currentTheme = ref.watch(themeModeProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -136,7 +127,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
                 Text(
-                  '本地 AI 引擎 · STT 转发 · 录音调优 · 存储管理',
+                  '视觉外观 · AI 引擎 · 采样调优 · 局域网服务 · 存储管理',
                   style: TextStyle(fontSize: 11, color: AppColors.textMuted),
                 ),
               ],
@@ -151,7 +142,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
             physics: const BouncingScrollPhysics(),
             children: [
-              // 1. AI 离线模型中枢
+              // 1. 视觉外观与主题风格 (深浅色高质感 Tab)
+              _buildSectionTitle(
+                title: '视觉外观与主题风格',
+                subtitle: '深浅模式切换、系统动态感应与调色板布局',
+                icon: Icons.palette_rounded,
+                iconColor: const Color(0xFF8B5CF6),
+              ),
+              const SizedBox(height: 10),
+              _buildThemeSelectorCard(currentTheme),
+              const SizedBox(height: 28),
+
+              // 2. AI 离线模型中枢
               _buildSectionTitle(
                 title: 'AI 离线模型中枢',
                 subtitle: '本地神经网路推理资产管理与自检',
@@ -162,18 +164,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildModelCenterCard(allModelsReady),
               const SizedBox(height: 28),
 
-              // 2. 本地 STT API 转发中枢
-              _buildSectionTitle(
-                title: '本地 STT API 服务中枢',
-                subtitle: '兼容 OpenAI Whisper 接口协议的局域网与本地调用服务',
-                icon: Icons.wifi_tethering_rounded,
-                iconColor: AppColors.cyan,
-              ),
-              const SizedBox(height: 10),
-              _buildServerHubCard(isServerRunning),
-              const SizedBox(height: 28),
-
-              // 3. 录音与识别调优
+              // 3. 音频采样与识别调优
               _buildSectionTitle(
                 title: '音频采样与识别调优',
                 subtitle: 'VAD 端点检测灵敏度、角色抗漂移与语种偏好',
@@ -184,7 +175,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildAudioTuningCard(),
               const SizedBox(height: 28),
 
-              // 4. 数据存储与维护
+              // 4. 本地 STT API 服务中枢
+              _buildSectionTitle(
+                title: '本地 STT API 服务中枢',
+                subtitle: '兼容 OpenAI Whisper 接口协议的局域网与本地调用服务',
+                icon: Icons.wifi_tethering_rounded,
+                iconColor: AppColors.cyan,
+              ),
+              const SizedBox(height: 10),
+              _buildServerHubCard(isServerRunning),
+              const SizedBox(height: 28),
+
+              // 5. 数据存储与维护
               _buildSectionTitle(
                 title: '数据存储与空间维护',
                 subtitle: 'SQLite 数据库、FTS5 全文索引与音频缓存清理',
@@ -195,7 +197,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildStorageMaintenanceCard(),
               const SizedBox(height: 28),
 
-              // 5. 系统保活与关于 PolyScribe
+              // 6. 系统保活与关于 PolyScribe
               _buildSectionTitle(
                 title: '系统保活与软件关于',
                 subtitle: '桌面端休眠防中断与客户端版本信息',
@@ -205,6 +207,351 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 10),
               _buildAboutAndKeepAliveCard(),
               const SizedBox(height: 36),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 0. 视觉外观与主题风格选择卡片 (高级深浅色 Segmented Tab 布局)
+  Widget _buildThemeSelectorCard(ThemeMode currentTheme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '主题外观模式',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  SizedBox(height: 3),
+                  Text(
+                    '支持深色沉浸、清爽明亮与自动跟随系统无缝切换',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      currentTheme == ThemeMode.light
+                          ? Icons.light_mode_rounded
+                          : currentTheme == ThemeMode.system
+                              ? Icons.brightness_auto_rounded
+                              : Icons.dark_mode_rounded,
+                      size: 13,
+                      color: AppColors.primary,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      currentTheme == ThemeMode.light
+                          ? '浅色模式'
+                          : currentTheme == ThemeMode.system
+                              ? '跟随系统'
+                              : '深色模式',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+
+          // 核心：三联高质感深浅色 Tab 选项卡
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 540;
+              final tabs = [
+                _ThemeTabItem(
+                  mode: ThemeMode.dark,
+                  title: '深色沉浸',
+                  subtitle: '科技深蓝黑 · 夜间专注舒适',
+                  icon: Icons.dark_mode_rounded,
+                  accentColor: const Color(0xFF6366F1),
+                  previewBg: const Color(0xFF0F172A),
+                  previewCardBg: const Color(0xFF1E293B),
+                  previewTextColor: Colors.white70,
+                ),
+                _ThemeTabItem(
+                  mode: ThemeMode.light,
+                  title: '明亮清新',
+                  subtitle: '极简素雅白 · 日间清晰护眼',
+                  icon: Icons.light_mode_rounded,
+                  accentColor: const Color(0xFFF59E0B),
+                  previewBg: const Color(0xFFF1F5F9),
+                  previewCardBg: Colors.white,
+                  previewTextColor: const Color(0xFF334155),
+                ),
+                _ThemeTabItem(
+                  mode: ThemeMode.system,
+                  title: '跟随系统',
+                  subtitle: '感应 Windows 外观模式自动匹配',
+                  icon: Icons.brightness_auto_rounded,
+                  accentColor: AppColors.emerald,
+                  previewBg: const Color(0xFF1A1F2C),
+                  previewCardBg: const Color(0xFF283145),
+                  previewTextColor: Colors.white60,
+                ),
+              ];
+
+              if (isNarrow) {
+                return Column(
+                  children: tabs.map((t) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _buildThemeOptionTile(t, currentTheme),
+                  )).toList(),
+                );
+              }
+
+              return Row(
+                children: tabs.map((t) {
+                  return Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        left: t.mode == ThemeMode.dark ? 0 : 6,
+                        right: t.mode == ThemeMode.system ? 0 : 6,
+                      ),
+                      child: _buildThemeCardTab(t, currentTheme),
+                    ),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 宽屏深浅色卡片 Tab
+  Widget _buildThemeCardTab(_ThemeTabItem tab, ThemeMode currentTheme) {
+    final isSelected = currentTheme == tab.mode;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () {
+          ref.read(themeModeProvider.notifier).setThemeMode(tab.mode);
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.surfaceElevated : AppColors.background.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected ? AppColors.primary : AppColors.cardBorder,
+              width: isSelected ? 1.8 : 1.0,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.22),
+                      blurRadius: 12,
+                      offset: const Offset(0, 3),
+                    ),
+                  ]
+                : [],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 模拟 UI 视窗微缩图
+              Container(
+                height: 60,
+                width: double.infinity,
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: tab.previewBg,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: Row(
+                  children: [
+                    // 模拟侧边导航条
+                    Container(
+                      width: 14,
+                      decoration: BoxDecoration(
+                        color: tab.accentColor.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 模拟主界面卡片
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Container(
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: tab.previewCardBg,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                          Container(
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: tab.previewCardBg,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: tab.accentColor.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                const SizedBox(width: 4),
+                                Container(
+                                  width: 4,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: tab.accentColor,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Container(
+                                  width: 24,
+                                  height: 3,
+                                  color: tab.previewTextColor,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(tab.icon, size: 16, color: isSelected ? AppColors.primary : AppColors.textMuted),
+                  const SizedBox(width: 6),
+                  Text(
+                    tab.title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                      color: isSelected ? Colors.white : AppColors.textSecondary,
+                    ),
+                  ),
+                  const Spacer(),
+                  // 单选圆点
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isSelected ? AppColors.primary : AppColors.textMuted,
+                        width: isSelected ? 4 : 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                tab.subtitle,
+                style: const TextStyle(fontSize: 10.5, color: AppColors.textMuted, height: 1.3),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 窄屏垂直列表深浅色选项
+  Widget _buildThemeOptionTile(_ThemeTabItem tab, ThemeMode currentTheme) {
+    final isSelected = currentTheme == tab.mode;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          ref.read(themeModeProvider.notifier).setThemeMode(tab.mode);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.surfaceElevated : AppColors.background,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? AppColors.primary : AppColors.cardBorder,
+              width: isSelected ? 1.5 : 1.0,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(tab.icon, size: 20, color: isSelected ? AppColors.primary : AppColors.textMuted),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tab.title,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                        color: isSelected ? Colors.white : AppColors.textPrimary,
+                      ),
+                    ),
+                    Text(
+                      tab.subtitle,
+                      style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSelected ? AppColors.primary : AppColors.textMuted,
+                    width: isSelected ? 5 : 1.5,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -853,4 +1200,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+}
+
+class _ThemeTabItem {
+  final ThemeMode mode;
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color accentColor;
+  final Color previewBg;
+  final Color previewCardBg;
+  final Color previewTextColor;
+
+  const _ThemeTabItem({
+    required this.mode,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.accentColor,
+    required this.previewBg,
+    required this.previewCardBg,
+    required this.previewTextColor,
+  });
 }

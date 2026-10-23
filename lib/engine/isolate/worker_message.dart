@@ -104,3 +104,51 @@ class SegmentTranscriptionResponse extends WorkerResponse {
     super.errorMessage,
   });
 }
+
+/// 转写段落传输载荷
+class TranscriptSegmentPayload {
+  final String taskId;
+  final String speakerId;
+  final String speakerName;
+  final int startMs;
+  final int endMs;
+  final String text;
+
+  const TranscriptSegmentPayload({
+    required this.taskId,
+    required this.speakerId,
+    required this.speakerName,
+    required this.startMs,
+    required this.endMs,
+    required this.text,
+  });
+}
+
+/// 离线全量文件转写最终响应
+class TranscribeFileResponse extends WorkerResponse {
+  final String taskId;
+  final List<TranscriptSegmentPayload> segments;
+  final int totalDurationMs;
+
+  const TranscribeFileResponse({
+    required super.messageId,
+    required super.isSuccess,
+    super.errorMessage,
+    required this.taskId,
+    required this.segments,
+    required this.totalDurationMs,
+  });
+}
+
+/// 工作线程中间进度通知
+class WorkerProgressNotification {
+  final String taskId;
+  final double progress;
+  final String stageDescription;
+
+  const WorkerProgressNotification({
+    required this.taskId,
+    required this.progress,
+    required this.stageDescription,
+  });
+}

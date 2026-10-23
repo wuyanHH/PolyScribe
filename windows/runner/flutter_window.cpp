@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "native_audio_engine.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,6 +26,8 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  NativeAudioEngine::Instance().RegisterChannel(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +43,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  NativeAudioEngine::Instance().Shutdown();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -62,6 +66,21 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_APP_DECODE_RESULT: {
+      auto* payload = reinterpret_cast<DecodeCallbackPayload*>(lparam);
+      if (payload) {
+        flutter::EncodableMap resp;
+        resp[flutter::EncodableValue("success")] = flutter::EncodableValue(payload->ok);
+        if (!payload->ok) {
+          resp[flutter::EncodableValue("error")] = flutter::EncodableValue(payload->err_msg);
+        }
+        if (payload->result) {
+          payload->result->Success(flutter::EncodableValue(resp));
+        }
+        delete payload;
+      }
+      return 0;
+    }
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

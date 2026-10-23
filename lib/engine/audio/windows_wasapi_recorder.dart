@@ -2,13 +2,16 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'native_audio_bridge.dart';
+import 'wav_codec.dart';
 
 /// 录音音源捕获模式
 enum AudioSourceMode {
   microphone('仅麦克风', '捕获近端麦克风人声发言', 'mic'),
-  systemAudio('仅系统声音', '捕获扬声器内录 (腾讯会议/Zoom/网课播放)', 'speaker'),
+  systemAudio('仅系统声音', '捕获扬声器/耳机内录 (外放/耳机/静音均支持)', 'speaker'),
   both('麦克风 + 系统声音', '双向全捕获：近端发言与远端播放同时识别', 'dual');
 
   final String title;
@@ -25,7 +28,7 @@ enum MeetingRecorderState {
   stopping, // 正在结束并封装文件
 }
 
-/// 音频采集与 WASAPI 内录/麦克风中枢
+/// 音频采集中枢 (Windows 原生 WASAPI Process/Endpoint Loopback + 移动端流式 PCM 引擎)
 class WindowsWasapiRecorder {
   static WindowsWasapiRecorder? _instance;
   static WindowsWasapiRecorder get instance => _instance ??= WindowsWasapiRecorder._();
@@ -38,13 +41,24 @@ class WindowsWasapiRecorder {
   AudioSourceMode _mode = AudioSourceMode.both;
   MeetingRecorderState _state = MeetingRecorderState.idle;
   String? _currentRecordingPath;
+  bool _usingWindowsNativeEngine = false;
 
   // 实时音浪振幅流 (0.0 ~ 1.0)
   final StreamController<double> _amplitudeController = StreamController<double>.broadcast();
   Stream<double> get onAmplitude => _amplitudeController.stream;
 
+  Timer? _nativePollTimer;
+  bool _isPollingNative = false;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
+  StreamSubscription<Uint8List>? _pcmStreamSubscription;
   List<InputDevice> _cachedDevices = [];
+
+  // 实时待转写的 16kHz 单声道浮点样本队列 (由原生引擎或 PCM 流直接推入，零磁盘锁竞争)
+  final List<Float32List> _pendingSampleChunks = [];
+  int _pendingSampleCount = 0;
+
+  // 移动端流式录音全量样本缓存 (用于结束时封装完整 WAV 文件)
+  final List<Float32List> _mobileAllRecordedChunks = [];
 
   AudioSourceMode get mode => _mode;
   MeetingRecorderState get state => _state;
@@ -52,21 +66,23 @@ class WindowsWasapiRecorder {
   bool get isPaused => _state == MeetingRecorderState.paused;
   String? get currentRecordingPath => _currentRecordingPath;
   List<InputDevice> get cachedDevices => _cachedDevices;
+  int get availableRealtimeSamples => _pendingSampleCount;
 
   void _initRecorder() {
-    _audioRecorder = AudioRecorder();
-    _refreshDevices();
+    if (!NativeAudioBridge.isWindowsNativeSupported) {
+      _audioRecorder = AudioRecorder();
+      _refreshDevices();
+    }
   }
 
   /// 刷新系统音频输入设备列表
   Future<List<InputDevice>> _refreshDevices() async {
+    if (NativeAudioBridge.isWindowsNativeSupported) {
+      return _cachedDevices;
+    }
     try {
       if (_audioRecorder != null) {
         _cachedDevices = await _audioRecorder!.listInputDevices();
-        debugPrint('[AudioRecorder] 已探测到输入设备 ${_cachedDevices.length} 个:');
-        for (final d in _cachedDevices) {
-          debugPrint(' - ID: ${d.id}, Label: ${d.label}');
-        }
       }
     } catch (e) {
       debugPrint('[AudioRecorder] 探测音频设备失败: $e');
@@ -84,28 +100,42 @@ class WindowsWasapiRecorder {
     debugPrint('[AudioRecorder] 切换录音模式为: ${mode.title}');
   }
 
-  /// 查找最适合当前模式的音频输入设备
-  InputDevice? _findDeviceForMode(AudioSourceMode mode) {
-    if (_cachedDevices.isEmpty) return null;
+  /// 取出当前已累积的 16kHz 单声道 Float32 音频样本并清空待处理队列
+  Float32List consumePendingSamples16k() {
+    if (_pendingSampleChunks.isEmpty || _pendingSampleCount == 0) {
+      return Float32List(0);
+    }
+    final result = Float32List(_pendingSampleCount);
+    int offset = 0;
+    for (final chunk in _pendingSampleChunks) {
+      result.setRange(offset, offset + chunk.length, chunk);
+      offset += chunk.length;
+    }
+    _pendingSampleChunks.clear();
+    _pendingSampleCount = 0;
+    return result;
+  }
 
-    if (mode == AudioSourceMode.systemAudio || mode == AudioSourceMode.both) {
-      // 优先在 Windows 上查找立体声混音 (Stereo Mix) 或 Loopback 虚拟声卡
-      final stereoMix = _cachedDevices.firstWhere(
-        (d) {
-          final label = d.label.toLowerCase();
-          return label.contains('stereo mix') ||
-              label.contains('立体声混音') ||
-              label.contains('loopback') ||
-              label.contains('what u hear') ||
-              label.contains('cable output');
-        },
-        orElse: () => _cachedDevices.first,
-      );
-      return stereoMix;
+  void _appendPcm16BytesToPending(Uint8List bytes, {bool recordForMobileFile = false}) {
+    if (bytes.length < 2) return;
+    final sampleCount = bytes.length ~/ 2;
+    final floats = Float32List(sampleCount);
+    final bd = ByteData.sublistView(bytes);
+    for (int i = 0; i < sampleCount; i++) {
+      floats[i] = bd.getInt16(i * 2, Endian.little) / 32768.0;
+    }
+    _pendingSampleChunks.add(floats);
+    _pendingSampleCount += floats.length;
+
+    // 防止极端情况下未消费导致内存无限累积 (最多保留最近 120 秒样本)
+    while (_pendingSampleCount > 16000 * 120 && _pendingSampleChunks.isNotEmpty) {
+      final removed = _pendingSampleChunks.removeAt(0);
+      _pendingSampleCount -= removed.length;
     }
 
-    // 默认或麦克风模式使用第一个麦克风设备
-    return _cachedDevices.first;
+    if (recordForMobileFile) {
+      _mobileAllRecordedChunks.add(floats);
+    }
   }
 
   /// 启动录制
@@ -114,28 +144,59 @@ class WindowsWasapiRecorder {
       return _currentRecordingPath ?? '';
     }
 
+    _pendingSampleChunks.clear();
+    _pendingSampleCount = 0;
+    _mobileAllRecordedChunks.clear();
+
     final id = taskId ?? 'live_${DateTime.now().millisecondsSinceEpoch}';
-    final tempDir = await getTemporaryDirectory();
-    final recordingsDir = Directory('${tempDir.path}/recordings/$id');
+    Directory baseDir;
+    try {
+      baseDir = await getApplicationSupportDirectory();
+    } catch (_) {
+      baseDir = await getTemporaryDirectory();
+    }
+
+    final recordingsDir = Directory(p.join(baseDir.path, 'recordings', id));
     if (!recordingsDir.existsSync()) {
       recordingsDir.createSync(recursive: true);
     }
 
-    final filePath = '${recordingsDir.path}/audio_live.wav';
+    final filePath = p.join(recordingsDir.path, 'audio_live.wav');
     _currentRecordingPath = filePath;
 
-    await _refreshDevices();
-    final targetDevice = _findDeviceForMode(_mode);
+    // 1. Windows 桌面端：直接启用 C++ 原生 WASAPI 双保险内录 (Process Loopback + Endpoint Loopback) 与麦克风引擎
+    if (NativeAudioBridge.isWindowsNativeSupported) {
+      final started = await NativeAudioBridge.startRecording(
+        filePath: filePath,
+        mode: _mode.key,
+      );
+      if (started) {
+        _usingWindowsNativeEngine = true;
+        _state = MeetingRecorderState.recording;
+        debugPrint('[AudioRecorder] Windows 原生 WASAPI 引擎已启动: $filePath, 模式: ${_mode.title}');
 
-    // 配置高质量 16kHz 16-bit 单/双通道 WAV，完美对齐 SenseVoice / Sherpa-ONNX 采样率
-    final config = RecordConfig(
-      encoder: AudioEncoder.wav,
-      sampleRate: 16000,
-      bitRate: 256000,
-      numChannels: _mode == AudioSourceMode.both ? 2 : 1,
-      device: targetDevice,
-    );
+        _nativePollTimer?.cancel();
+        _nativePollTimer = Timer.periodic(const Duration(milliseconds: 60), (_) async {
+          if (_isPollingNative || _state != MeetingRecorderState.recording) return;
+          _isPollingNative = true;
+          try {
+            final pollData = await NativeAudioBridge.pollRealtimeAudio();
+            if (pollData != null) {
+              _amplitudeController.add(pollData.amplitude);
+              if (pollData.pcm16kMonoBytes.isNotEmpty) {
+                _appendPcm16BytesToPending(pollData.pcm16kMonoBytes);
+              }
+            }
+          } finally {
+            _isPollingNative = false;
+          }
+        });
+        return filePath;
+      }
+    }
 
+    // 2. 移动端 (Android / iOS) 或回退模式：采用 PCM 16kHz 流式采集并实时落盘
+    _usingWindowsNativeEngine = false;
     try {
       _audioRecorder ??= AudioRecorder();
       final hasPerm = await _audioRecorder!.hasPermission();
@@ -143,34 +204,39 @@ class WindowsWasapiRecorder {
         debugPrint('[AudioRecorder] 警告: 未获取到麦克风录音权限');
       }
 
-      await _audioRecorder!.start(config, path: filePath);
-      _state = MeetingRecorderState.recording;
-      debugPrint('[AudioRecorder] 已启动录制: $filePath, 音源: ${_mode.title}, 设备: ${targetDevice?.label ?? "系统默认"}');
+      const streamConfig = RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: 16000,
+        numChannels: 1,
+      );
 
-      // 监听音量振幅流以驱动平滑 UI 波形
+      final pcmStream = await _audioRecorder!.startStream(streamConfig);
+      _state = MeetingRecorderState.recording;
+      debugPrint('[AudioRecorder] 已启动流式 PCM 录制: $filePath');
+
+      _pcmStreamSubscription?.cancel();
+      _pcmStreamSubscription = pcmStream.listen((chunkBytes) {
+        if (_state == MeetingRecorderState.recording && chunkBytes.isNotEmpty) {
+          _appendPcm16BytesToPending(chunkBytes, recordForMobileFile: true);
+        }
+      });
+
       _amplitudeSubscription?.cancel();
       _amplitudeSubscription = _audioRecorder!
           .onAmplitudeChanged(const Duration(milliseconds: 60))
           .listen((amp) {
-        // amp.current 范围约为 -160dBFS 到 0dBFS
-        // 映射到 0.0 ~ 1.0 的归一化平滑振幅
         final db = amp.current;
         double normalized = 0.0;
         if (db > -55.0) {
           normalized = ((db + 55.0) / 55.0).clamp(0.0, 1.0);
-          // 强化微小声音的动态感
           normalized = pow(normalized, 0.7).toDouble();
         }
         _amplitudeController.add(normalized);
       });
     } catch (e) {
-      debugPrint('[AudioRecorder] 启动录制失败，尝试降级兼容模式: $e');
+      debugPrint('[AudioRecorder] 启动录制失败，启用安全兜底占位: $e');
       _state = MeetingRecorderState.recording;
-      // 创建一个空占位文件保证后续链路安全
-      final dummyFile = File(filePath);
-      if (!dummyFile.existsSync()) {
-        dummyFile.createSync(recursive: true);
-      }
+      await WavCodec.writeMono16kWavFile(filePath, Float32List(0));
     }
 
     return filePath;
@@ -179,10 +245,14 @@ class WindowsWasapiRecorder {
   /// 暂停录制
   Future<void> pauseRecording() async {
     if (_state != MeetingRecorderState.recording) return;
-    try {
-      await _audioRecorder?.pause();
-    } catch (e) {
-      debugPrint('[AudioRecorder] 暂停录制异常: $e');
+    if (_usingWindowsNativeEngine) {
+      await NativeAudioBridge.pauseRecording();
+    } else {
+      try {
+        await _audioRecorder?.pause();
+      } catch (e) {
+        debugPrint('[AudioRecorder] 暂停录制异常: $e');
+      }
     }
     _state = MeetingRecorderState.paused;
     debugPrint('[AudioRecorder] 已暂停录制');
@@ -191,10 +261,14 @@ class WindowsWasapiRecorder {
   /// 恢复录制
   Future<void> resumeRecording() async {
     if (_state != MeetingRecorderState.paused) return;
-    try {
-      await _audioRecorder?.resume();
-    } catch (e) {
-      debugPrint('[AudioRecorder] 恢复录制异常: $e');
+    if (_usingWindowsNativeEngine) {
+      await NativeAudioBridge.resumeRecording();
+    } else {
+      try {
+        await _audioRecorder?.resume();
+      } catch (e) {
+        debugPrint('[AudioRecorder] 恢复录制异常: $e');
+      }
     }
     _state = MeetingRecorderState.recording;
     debugPrint('[AudioRecorder] 已恢复录制');
@@ -207,25 +281,62 @@ class WindowsWasapiRecorder {
     }
 
     _state = MeetingRecorderState.stopping;
+    _nativePollTimer?.cancel();
+    _nativePollTimer = null;
     _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
+    await _pcmStreamSubscription?.cancel();
+    _pcmStreamSubscription = null;
 
     String? finalPath;
-    try {
-      finalPath = await _audioRecorder?.stop();
-    } catch (e) {
-      debugPrint('[AudioRecorder] 停止录制异常: $e');
+    if (_usingWindowsNativeEngine) {
+      // 拉取最后一次残余缓冲样本
+      final lastPoll = await NativeAudioBridge.pollRealtimeAudio();
+      if (lastPoll != null && lastPoll.pcm16kMonoBytes.isNotEmpty) {
+        _appendPcm16BytesToPending(lastPoll.pcm16kMonoBytes);
+      }
+      finalPath = await NativeAudioBridge.stopRecording();
+    } else {
+      try {
+        await _audioRecorder?.stop();
+      } catch (e) {
+        debugPrint('[AudioRecorder] 停止录制异常: $e');
+      }
+
+      // 将移动端收集的 PCM 样本封装为标准 16kHz WAV 文件
+      if (_currentRecordingPath != null) {
+        int totalLen = 0;
+        for (final c in _mobileAllRecordedChunks) {
+          totalLen += c.length;
+        }
+        final allSamples = Float32List(totalLen);
+        int offset = 0;
+        for (final c in _mobileAllRecordedChunks) {
+          allSamples.setRange(offset, offset + c.length, c);
+          offset += c.length;
+        }
+        await WavCodec.writeMono16kWavFile(_currentRecordingPath!, allSamples);
+        _mobileAllRecordedChunks.clear();
+        finalPath = _currentRecordingPath;
+      }
     }
 
     _state = MeetingRecorderState.idle;
-    final result = finalPath ?? _currentRecordingPath ?? '';
+    final result = (finalPath != null && finalPath.isNotEmpty)
+        ? finalPath
+        : (_currentRecordingPath ?? '');
     debugPrint('[AudioRecorder] 录音结束，最终音频文件: $result');
     return result;
   }
 
   /// 销毁资源
   Future<void> dispose() async {
+    _nativePollTimer?.cancel();
     _amplitudeSubscription?.cancel();
+    await _pcmStreamSubscription?.cancel();
+    if (_usingWindowsNativeEngine) {
+      await NativeAudioBridge.stopRecording();
+    }
     await _audioRecorder?.dispose();
     await _amplitudeController.close();
     _audioRecorder = null;

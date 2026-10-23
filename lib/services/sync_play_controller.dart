@@ -140,6 +140,20 @@ class SyncPlayController extends ChangeNotifier {
     }
   }
 
+  /// 明确暂停播放
+  Future<void> pause() async {
+    if (!_isAudioAvailable) return;
+    if (_state.isPlaying) {
+      await _audioPlayer.pause();
+    }
+  }
+
+  /// 停止播放并复位
+  Future<void> stop() async {
+    if (!_isAudioAvailable) return;
+    await _audioPlayer.stop();
+  }
+
   /// 跳转至指定毫秒时间戳 (Seek)
   Future<void> seek(int targetMs) async {
     final clamped = targetMs.clamp(0, _state.durationMs > 0 ? _state.durationMs : targetMs);

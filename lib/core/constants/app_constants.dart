@@ -8,8 +8,8 @@ class AppConstants {
   static const String appEnglishName = 'PolyScribe';
   static const String appSlogan = '多角色离线语音转写与声纹中枢';
   static const String appId = 'com.polyscribe.audio';
-  static const String appVersion = 'v0.1.0-beta.1';
-  static const int appBuildNumber = 100;
+  static const String appVersion = 'v0.1.0-beta.3';
+  static const int appBuildNumber = 103;
 
   // 音频处理核心规格
   static const int sampleRate = 16000; // 统一 16kHz

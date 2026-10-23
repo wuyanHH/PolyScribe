@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -13,6 +14,16 @@ class AppDatabase {
   static AppDatabase get instance => _instance ??= AppDatabase._();
 
   Database? _db;
+
+  /// 数据库变更全局广播流 (驱动各页面响应式无感刷新)
+  final StreamController<void> _changeController = StreamController<void>.broadcast();
+  Stream<void> get onDatabaseChanged => _changeController.stream;
+
+  void notifyDatabaseChanged() {
+    if (!_changeController.isClosed) {
+      _changeController.add(null);
+    }
+  }
 
   AppDatabase._();
 
@@ -94,6 +105,28 @@ class AppDatabase {
     );
   }
 
+  /// 读取系统通用键值设置
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    await db.execute('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    final rows = await db.query('app_settings', where: 'key = ?', whereArgs: [key]);
+    if (rows.isNotEmpty) {
+      return rows.first['value'] as String?;
+    }
+    return null;
+  }
+
+  /// 写入系统通用键值设置
+  Future<void> saveSetting(String key, String value) async {
+    final db = await database;
+    await db.execute('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    await db.insert(
+      'app_settings',
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
   /// 插入或更新任务
   Future<void> saveTask(MeetingTask task) async {
     final db = await database;
@@ -102,6 +135,7 @@ class AppDatabase {
       task.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    notifyDatabaseChanged();
   }
 
   /// 更新任务标题
@@ -113,6 +147,62 @@ class AppDatabase {
       where: 'id = ?',
       whereArgs: [taskId],
     );
+    notifyDatabaseChanged();
+  }
+
+  /// 批量更新指定任务下某角色 (speakerId) 的显示姓名
+  Future<void> updateSpeakerNameForTask(
+    String taskId,
+    String speakerId,
+    String newSpeakerName,
+  ) async {
+    final db = await database;
+    await db.update(
+      'segments',
+      {'speaker_name': newSpeakerName},
+      where: 'task_id = ? AND speaker_id = ?',
+      whereArgs: [taskId, speakerId],
+    );
+    notifyDatabaseChanged();
+  }
+
+  /// 更新单条转写段落文本并同步 FTS5 索引
+  Future<void> updateSegmentText(int segmentId, String taskId, String newText) async {
+    final db = await database;
+    await db.update(
+      'segments',
+      {'text': newText},
+      where: 'id = ?',
+      whereArgs: [segmentId],
+    );
+    try {
+      await db.update(
+        'segments_fts',
+        {'text': newText},
+        where: 'segment_id = ?',
+        whereArgs: [segmentId],
+      );
+    } catch (_) {}
+    notifyDatabaseChanged();
+  }
+
+  /// 清除指定任务关联的所有旧转写段落与 FTS5 索引 (用于重新转写任务)
+  Future<void> clearSegmentsForTask(String taskId) async {
+    final db = await database;
+    try {
+      await db.delete(
+        'segments_fts',
+        where: 'task_id = ?',
+        whereArgs: [taskId],
+      );
+    } catch (_) {}
+
+    await db.delete(
+      'segments',
+      where: 'task_id = ?',
+      whereArgs: [taskId],
+    );
+    notifyDatabaseChanged();
   }
 
   /// 彻底删除任务及其关联的所有段落与全文索引
@@ -157,6 +247,7 @@ class AppDatabase {
         debugPrint('[AppDatabase] 删除物理音频文件失败: $e');
       }
     }
+    notifyDatabaseChanged();
   }
 
   /// 查询单个任务
@@ -193,7 +284,36 @@ class AppDatabase {
       });
     } catch (_) {}
 
+    notifyDatabaseChanged();
     return id;
+  }
+
+  /// 事务级批量插入段落并同步写入全文索引 (仅触发一次全局通知，杜绝高频刷新卡顿)
+  Future<void> insertSegmentsBatch(List<TranscriptSegment> segments) async {
+    if (segments.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final segment in segments) {
+        final id = await txn.insert('segments', segment.toMap());
+        try {
+          await txn.insert('segments_fts', {
+            'rowid': id,
+            'text': segment.text,
+            'task_id': segment.taskId,
+            'segment_id': id,
+          });
+        } catch (_) {}
+      }
+    });
+    notifyDatabaseChanged();
+  }
+
+  /// 全文检索关键词并返回命中的 taskId 集合
+  Future<Set<String>> searchTaskIdsByKeyword(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return {};
+    final segs = await searchSegments(q);
+    return segs.map((s) => s.taskId).toSet();
   }
 
   /// 批量高性能获取任务统计信息 (单次 SQL 聚合，消除 N+1 慢查询)
@@ -334,12 +454,39 @@ class AppDatabase {
       print.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    notifyDatabaseChanged();
+  }
+
+  /// 更新声纹档案姓名
+  Future<void> updateVoicePrintName(String id, String newName) async {
+    final db = await database;
+    await db.update(
+      'voice_prints',
+      {
+        'person_name': newName,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    notifyDatabaseChanged();
+  }
+
+  /// 删除声纹档案
+  Future<void> deleteVoicePrint(String id) async {
+    final db = await database;
+    await db.delete(
+      'voice_prints',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    notifyDatabaseChanged();
   }
 
   /// 获取所有实名声纹
   Future<List<VoicePrint>> getAllVoicePrints() async {
     final db = await database;
-    final results = await db.query('voice_prints');
+    final results = await db.query('voice_prints', orderBy: 'updated_at DESC');
     return results.map((e) => VoicePrint.fromMap(e)).toList();
   }
 

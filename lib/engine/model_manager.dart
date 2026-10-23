@@ -52,12 +52,32 @@ class ModelManager {
       }
       return modelDir;
     } else {
-      // 桌面端或开发环境优先检查工程 assets/models 或 用户文档目录
+      // 桌面端多候选路径探测 (涵盖打包目录、Debug/Release 构建目录与用户数据目录)
       final exeDir = File(Platform.resolvedExecutable).parent;
-      final devDir = Directory(p.join(Directory.current.path, 'assets', 'models'));
-      if (devDir.existsSync()) {
-        return devDir;
+      final curDir = Directory.current.path;
+      final candidates = <Directory>[
+        Directory(p.join(exeDir.path, 'models')),
+        Directory(p.join(exeDir.parent.path, 'Release', 'models')),
+        Directory(p.join(exeDir.parent.path, 'Debug', 'models')),
+        Directory(p.join(curDir, 'build', 'windows', 'x64', 'runner', 'Release', 'models')),
+        Directory(p.join(curDir, 'build', 'windows', 'x64', 'runner', 'Debug', 'models')),
+        Directory(p.join(curDir, 'assets', 'models')),
+        Directory(p.join(curDir, 'models')),
+      ];
+
+      try {
+        final appSupport = await getApplicationSupportDirectory();
+        candidates.add(Directory(p.join(appSupport.path, 'models')));
+      } catch (_) {}
+
+      for (final cand in candidates) {
+        if (cand.existsSync() &&
+            File(p.join(cand.path, 'sensevoice_small_int8.onnx')).existsSync() &&
+            File(p.join(cand.path, 'tokens.txt')).existsSync()) {
+          return cand;
+        }
       }
+
       final desktopDir = Directory(p.join(exeDir.path, 'models'));
       if (!desktopDir.existsSync()) {
         await desktopDir.create(recursive: true);

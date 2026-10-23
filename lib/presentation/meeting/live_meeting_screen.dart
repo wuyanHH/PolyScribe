@@ -8,7 +8,6 @@ import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../data/models/transcript_segment.dart';
 import '../../engine/audio/windows_wasapi_recorder.dart';
-import '../../engine/diarization/online_centroid_bank.dart';
 import '../../engine/isolate/inference_worker.dart';
 import '../../engine/isolate/worker_message.dart';
 import '../../engine/model_manager.dart';
@@ -18,7 +17,12 @@ import '../player/sync_player_screen.dart';
 
 /// 实时长会议记录控制台 (全新现代UI / 多音源选择 / 动态多角色聚类 / 高刷新率微动效)
 class LiveMeetingScreen extends StatefulWidget {
-  const LiveMeetingScreen({super.key});
+  final VoidCallback? onBackToHome;
+
+  const LiveMeetingScreen({
+    super.key,
+    this.onBackToHome,
+  });
 
   @override
   State<LiveMeetingScreen> createState() => _LiveMeetingScreenState();
@@ -33,8 +37,6 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
   final ValueNotifier<int> _elapsedMsNotifier = ValueNotifier<int>(0);
   final ValueNotifier<bool> _isAutoScrollEnabled = ValueNotifier<bool>(true);
 
-  OnlineCentroidBank? _centroidBank;
-
   MeetingRecorderState _recorderState = MeetingRecorderState.idle;
   AudioSourceMode _selectedSourceMode = AudioSourceMode.both;
   bool _isModelReady = false;
@@ -46,6 +48,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
   int _lastProcessedByteOffset = 44; // WAV 文件头 44 字节
   bool _isProcessingChunk = false;
   String? _recordedAudioPath;
+
+  // 实时语音累积缓冲与当前句起始时间戳 (毫秒)
+  final List<double> _accumulatedSamples = [];
+  int _currentUtteranceStartMs = 0;
 
   // 动画控制器
   late final AnimationController _pulseAnimController;
@@ -83,8 +89,6 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
   Future<void> _checkSystemEnvironment() async {
     final config = await ModelManager.instance.resolveModels();
-    final knownPrints = await AppDatabase.instance.getAllVoicePrints();
-    _centroidBank = OnlineCentroidBank(initialVoicePrints: knownPrints);
 
     if (config.isSenseVoiceReady) {
       if (mounted) {
@@ -143,65 +147,158 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     }
   }
 
-  /// 真实音频切片提取与实时语音识别流水线
-  Future<void> _processRealtimeAudioChunk() async {
+  /// 真实音频切片提取与智能停顿语音识别流水线
+  Future<void> _processRealtimeAudioChunk({bool forceFlush = false}) async {
     if (_isProcessingChunk) return;
-    if (_recordedAudioPath == null) return;
-    final audioFile = File(_recordedAudioPath!);
-    if (!audioFile.existsSync()) return;
 
     _isProcessingChunk = true;
     try {
-      final fileLength = await audioFile.length();
-      if (_lastProcessedByteOffset >= fileLength) return;
+      // 1. 优先从原生 WASAPI / 流式内存队列中直接拉取最新的 16kHz 单声道样本 (零文件锁竞争、零字节错位)
+      final pendingFromMemory = WindowsWasapiRecorder.instance.consumePendingSamples16k();
+      if (pendingFromMemory.isNotEmpty) {
+        if (_accumulatedSamples.isEmpty) {
+          final chunkMs = (pendingFromMemory.length * 1000) ~/ 16000;
+          _currentUtteranceStartMs = max(0, _elapsedMsNotifier.value - chunkMs);
+        }
+        _accumulatedSamples.addAll(pendingFromMemory);
+      } else if (_recordedAudioPath != null) {
+        // 备用回退：从 WAV 文件按偶数字节对齐读取
+        final audioFile = File(_recordedAudioPath!);
+        if (audioFile.existsSync()) {
+          final fileLength = await audioFile.length();
+          final rawAvailable = fileLength - _lastProcessedByteOffset;
+          final alignedBytes = rawAvailable & ~3; // 4字节对齐，杜绝奇数字节错位
+          if (alignedBytes > 0) {
+            final raf = await audioFile.open(mode: FileMode.read);
+            await raf.setPosition(_lastProcessedByteOffset);
+            final rawBytes = await raf.read(alignedBytes);
+            await raf.close();
+            _lastProcessedByteOffset += rawBytes.length;
 
-      // 每次至少累积 32000 字节 (单声道约 1 秒音频，双声道约 0.5 秒)
-      final availableBytes = fileLength - _lastProcessedByteOffset;
-      if (availableBytes < 32000) return;
+            final floatSamples = _bytesToFloat32Pcm(rawBytes, 1);
+            if (floatSamples.isNotEmpty) {
+              if (_accumulatedSamples.isEmpty) {
+                final chunkMs = (floatSamples.length * 1000) ~/ 16000;
+                _currentUtteranceStartMs = max(0, _elapsedMsNotifier.value - chunkMs);
+              }
+              _accumulatedSamples.addAll(floatSamples);
+            }
+          }
+        }
+      }
 
-      final raf = await audioFile.open(mode: FileMode.read);
-      await raf.setPosition(_lastProcessedByteOffset);
-      final rawBytes = await raf.read(availableBytes);
-      await raf.close();
+      if (_accumulatedSamples.isEmpty) return;
 
-      _lastProcessedByteOffset += availableBytes;
+      const sampleRate = 16000;
+      final totalSamples = _accumulatedSamples.length;
 
-      final channels = _selectedSourceMode == AudioSourceMode.both ? 2 : 1;
-      final floatSamples = _bytesToFloat32Pcm(rawBytes, channels);
-      if (floatSamples.length < 8000) return;
+      // 计算当前累积音频的峰值与有效能量
+      double peak = 0.0;
+      double sumSq = 0.0;
+      for (int i = 0; i < totalSamples; i++) {
+        final v = _accumulatedSamples[i];
+        final av = v.abs();
+        if (av > peak) peak = av;
+        sumSq += v * v;
+      }
+      final overallRms = sqrt(sumSq / totalSamples);
+
+      // 若整段完全是死寂静音，超过 3 秒则自动滑动丢弃前段静音并对齐起始时间，防止静音无限堆积
+      if (peak < 0.0025 && overallRms < 0.0005) {
+        if (totalSamples > sampleRate * 3 || forceFlush) {
+          final dropCount = forceFlush ? totalSamples : (totalSamples - sampleRate ~/ 2);
+          _accumulatedSamples.removeRange(0, dropCount);
+          _currentUtteranceStartMs += (dropCount * 1000) ~/ sampleRate;
+        }
+        return;
+      }
+
+      // 非强制刷出时，至少累积 1.5 秒以上再判断断句
+      if (!forceFlush && totalSamples < (sampleRate * 1.5).toInt()) {
+        return;
+      }
+
+      // 检查末尾 360ms 是否出现自然说话停顿 (静音谷底)
+      const tailWindow = 5760; // 0.36s @ 16kHz
+      bool hasTrailingPause = false;
+      if (totalSamples >= sampleRate * 1.6 && totalSamples > tailWindow) {
+        double tailSumSq = 0.0;
+        for (int i = totalSamples - tailWindow; i < totalSamples; i++) {
+          final v = _accumulatedSamples[i];
+          tailSumSq += v * v;
+        }
+        final tailRms = sqrt(tailSumSq / tailWindow);
+        if (tailRms < max(0.012, overallRms * 0.38)) {
+          hasTrailingPause = true;
+        }
+      }
+
+      final reachedMaxWindow = totalSamples >= (sampleRate * 6.0).toInt();
+      if (!forceFlush && !hasTrailingPause && !reachedMaxWindow) {
+        return;
+      }
+
+      // 确定最佳切分位置：若因达到 6 秒上限而切分，在末尾 1.8 秒内寻找能量最低的 100ms 谷底切开，绝不截断正在说的词
+      int cutCount = totalSamples;
+      if (!forceFlush && !hasTrailingPause && totalSamples > sampleRate * 4) {
+        const searchWin = 1600; // 100ms
+        final searchStart = max(sampleRate * 3, totalSamples - (sampleRate * 1.8).toInt());
+        double minWinRms = double.infinity;
+        int bestPos = totalSamples;
+        for (int pos = searchStart; pos + searchWin <= totalSamples; pos += 400) {
+          double wSq = 0.0;
+          for (int k = 0; k < searchWin; k++) {
+            final v = _accumulatedSamples[pos + k];
+            wSq += v * v;
+          }
+          final wRms = sqrt(wSq / searchWin);
+          if (wRms < minWinRms) {
+            minWinRms = wRms;
+            bestPos = pos + (searchWin ~/ 2);
+          }
+        }
+        cutCount = bestPos;
+      }
+
+      final sliceFloats = Float32List(cutCount);
+      for (int i = 0; i < cutCount; i++) {
+        sliceFloats[i] = _accumulatedSamples[i];
+      }
+      _accumulatedSamples.removeRange(0, cutCount);
+
+      final startMs = _currentUtteranceStartMs;
+      final chunkDurationMs = (cutCount * 1000) ~/ sampleRate;
+      final endMs = startMs + chunkDurationMs;
+      _currentUtteranceStartMs = endMs;
+
+      if (sliceFloats.length < 4800) return; // 忽略不足 0.3 秒的极短碎片
 
       final worker = InferenceWorkerCoordinator.instance;
       if (!_isModelReady || !worker.isReady) return;
 
       final chunkIndex = _chunkCounter++;
-      final chunkDurationMs = (floatSamples.length / 16000 * 1000).toInt();
-      final endMs = _elapsedMsNotifier.value;
-      final startMs = max(0, endMs - chunkDurationMs);
-
       final res = await worker.transcribeChunk(TranscribeChunkCommand(
         messageId: 'live_chunk_${_taskId}_$chunkIndex',
         taskId: _taskId,
         chunkIndex: chunkIndex,
         startMs: startMs,
         endMs: endMs,
-        samples: floatSamples,
+        samples: sliceFloats,
       ));
 
       if (res != null && res.isSuccess && res.text.trim().isNotEmpty) {
         final text = res.text.trim();
-        // 过滤空标点与过短杂音
+        // 过滤空标点与过短无意义杂音
         if (text.length >= 2 || RegExp(r'[\u4e00-\u9fa5a-zA-Z0-9]').hasMatch(text)) {
-          final diarResult = _centroidBank?.assignSpeaker(
-            embedding: Float32List(192),
-            durationMs: chunkDurationMs,
-            startMs: startMs,
-            endMs: endMs,
-          );
+          final String spkId = res.speakerId.isNotEmpty ? res.speakerId : 'SPK_01';
+          final String spkName = (res.speakerName != null && res.speakerName!.isNotEmpty)
+              ? res.speakerName!
+              : '发言人 1';
 
           final newSegment = TranscriptSegment(
             taskId: _taskId,
-            speakerId: diarResult?.speakerId ?? 'SPK_01',
-            speakerName: diarResult?.speakerName ?? '发言人 1',
+            speakerId: spkId,
+            speakerName: spkName,
             startMs: startMs,
             endMs: endMs,
             text: text,
@@ -275,6 +372,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
     _taskId = 'live_${DateTime.now().millisecondsSinceEpoch}';
     _segments.clear();
+    _accumulatedSamples.clear();
+    _currentUtteranceStartMs = 0;
     _elapsedMsNotifier.value = 0;
     _chunkCounter = 0;
     _lastProcessedByteOffset = 44;
@@ -303,9 +402,9 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       }
     });
 
-    // 启动真实音频切片周期性识别流水线 (每 2.5 秒触发一次增量转写)
+    // 启动真实音频切片周期性识别流水线 (每 700ms 触发一次智能停顿检测与增量转写)
     _realtimeTranscriptionTimer?.cancel();
-    _realtimeTranscriptionTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+    _realtimeTranscriptionTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
       if (_recorderState == MeetingRecorderState.recording) {
         _processRealtimeAudioChunk();
       }
@@ -387,8 +486,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     await KeepAliveService.instance.releaseWakeLock();
     await KeepAliveService.instance.stopForegroundService();
 
-    // 收尾处理：若还有未处理的尾部音频，执行最后一次转写
-    await _processRealtimeAudioChunk();
+    // 收尾处理：若还有未处理的尾部音频，执行最后一次强制转写
+    await _processRealtimeAudioChunk(forceFlush: true);
 
     final finalTitle = _titleController.text.trim().isEmpty
         ? '实时会议纪要 ${_formatCurrentDate()}'
@@ -413,10 +512,11 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     if (mounted) {
       setState(() {
         _recorderState = MeetingRecorderState.idle;
+        _titleController.text = '实时会议纪要 ${_formatCurrentDate()}';
       });
 
-      // 导航至音字同步播放详情页
-      Navigator.of(context).pushReplacement(
+      // 导航至音字同步播放详情页 (使用 push 保留主导航侧边栏栈，避免 pushReplacement 销毁根框架)
+      await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => SyncPlayerScreen(task: task),
         ),
@@ -472,6 +572,58 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     return '${now.month}月${now.day}日 ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
   }
 
+  /// 处理返回上级/纪要库逻辑
+  Future<void> _handleBack() async {
+    final isBusy = _recorderState == MeetingRecorderState.recording ||
+        _recorderState == MeetingRecorderState.paused;
+
+    if (isBusy) {
+      final shouldLeave = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.info_outline_rounded, color: AppColors.primary),
+              SizedBox(width: 10),
+              Text('会议正在进行中', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            '当前实时会议录制尚未结束。\n切回纪要库后，录音与转录将在后台持续进行，您可以随时通过侧边栏切回本页面继续查看。',
+            style: TextStyle(color: AppColors.textSecondary, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('留在此页', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('切回纪要库', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldLeave != true) return;
+    }
+
+    if (!mounted) return;
+
+    if (widget.onBackToHome != null) {
+      widget.onBackToHome!();
+    } else if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   void dispose() {
     _tickerTimer?.cancel();
@@ -486,20 +638,27 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopHeader(),
-            if (!_isModelReady) _buildModelNoticeBanner(),
-            Expanded(
-              child: _recorderState == MeetingRecorderState.idle
-                  ? _buildIdleSetupView()
-                  : _buildLiveTranscriptionView(),
-            ),
-            _buildBottomControlBar(),
-          ],
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildTopHeader(),
+              if (!_isModelReady) _buildModelNoticeBanner(),
+              Expanded(
+                child: _recorderState == MeetingRecorderState.idle
+                    ? _buildIdleSetupView()
+                    : _buildLiveTranscriptionView(),
+              ),
+              _buildBottomControlBar(),
+            ],
+          ),
         ),
       ),
     );
@@ -518,6 +677,38 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       ),
       child: Row(
         children: [
+          // 返回纪要库按钮
+          Tooltip(
+            message: '返回纪要库',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: _handleBack,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.arrow_back_ios_new_rounded, size: 13, color: AppColors.textSecondary),
+                    SizedBox(width: 6),
+                    Text(
+                      '纪要库',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
           // 状态光环与文字
           AnimatedBuilder(
             animation: _pulseScaleAnim,
@@ -922,6 +1113,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               amplitudeStream: WindowsWasapiRecorder.instance.onAmplitude,
               isPaused: _recorderState == MeetingRecorderState.paused,
             ),
+            // 实时发言人质心池与字数统计胶囊条
+            if (_segments.isNotEmpty) _buildLiveStatsAndSpeakersBar(),
             // 文档流列表
             Expanded(
               child: _segments.isEmpty
@@ -990,6 +1183,85 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
           },
         ),
       ],
+    );
+  }
+
+  /// 实时发言人质心池与字数统计胶囊条
+  Widget _buildLiveStatsAndSpeakersBar() {
+    final totalWords = _segments.fold<int>(0, (acc, s) => acc + s.text.length);
+    final speakerMap = <String, String>{};
+    for (final s in _segments) {
+      speakerMap[s.speakerId] = s.speakerName ?? AppColors.getSpeakerColor(s.speakerId).defaultRoleName;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.people_alt_outlined, size: 15, color: AppColors.primary),
+          const SizedBox(width: 6),
+          const Text(
+            '在线声纹角色:',
+            style: TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: speakerMap.entries.map((entry) {
+                  final spkColor = AppColors.getSpeakerColor(entry.key);
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () => _editSpeakerName(entry.key, entry.value),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: spkColor.color.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: spkColor.color.withValues(alpha: 0.35)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(color: spkColor.color, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              entry.value,
+                              style: TextStyle(
+                                color: spkColor.color,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(Icons.edit_outlined, size: 11, color: spkColor.color.withValues(alpha: 0.7)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '${_segments.length} 段 · $totalWords 字',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
     );
   }
 
