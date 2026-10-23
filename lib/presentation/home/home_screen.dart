@@ -263,6 +263,18 @@ class _HomeScreenState extends State<HomeScreen> {
             '点击右下角按钮直接选择单个音频，或切换到实时长会议开始录音',
             style: TextStyle(color: Colors.grey, fontSize: 12),
           ),
+          const SizedBox(height: 18),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            ),
+            icon: const Icon(Icons.mic_rounded, size: 18),
+            label: const Text('立即开启实时会议转录', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: widget.onNavigateToMeeting,
+          ),
         ],
       ),
     );

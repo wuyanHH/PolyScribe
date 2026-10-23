@@ -11,7 +11,7 @@ import '../../services/server/http_server.dart';
 import '../models/model_manager_screen.dart';
 import '../server/server_console_screen.dart';
 
-/// 系统中枢与偏好设置页面
+/// 系统中枢与偏好设置页面 (深度现代化重构 / 桌面端居中自适应 / 精致微质感卡片)
 class SettingsScreen extends StatefulWidget {
   final LocalHttpServer? localHttpServer;
   final VoidCallback? onToggleServer;
@@ -32,6 +32,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _enableDriftSuppression = true;
   String _preferredLanguage = 'auto';
   String _dbSizeText = '计算中...';
+  String _dbDirPath = '';
+  bool _isVacuuming = false;
 
   @override
   void initState() {
@@ -42,7 +44,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettingsData() async {
     final config = await ModelManager.instance.resolveModels();
     final dbDir = await getApplicationDocumentsDirectory();
+    _dbDirPath = dbDir.path;
     final dbFile = File(p.join(dbDir.path, 'polyscribe.db'));
+
     String sizeStr = '0 KB';
     if (dbFile.existsSync()) {
       final bytes = await dbFile.length();
@@ -60,13 +64,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _vacuumDatabase() async {
-    final db = await AppDatabase.instance.database;
-    await db.execute('VACUUM');
-    await _loadSettingsData();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('SQLite 数据库紧缩与索引重建完成')),
-      );
+    if (_isVacuuming) return;
+    setState(() => _isVacuuming = true);
+
+    try {
+      final db = await AppDatabase.instance.database;
+      await db.execute('VACUUM');
+      await _loadSettingsData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: AppColors.surfaceElevated,
+            content: Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: AppColors.emerald, size: 20),
+                SizedBox(width: 10),
+                Text('SQLite 数据库紧缩与索引碎片清理完成', style: TextStyle(color: Colors.white)),
+              ],
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('优化失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isVacuuming = false);
+      }
+    }
+  }
+
+  /// 在系统资源管理器中打开数据文件夹
+  void _openDataDirectory() {
+    if (_dbDirPath.isNotEmpty && Platform.isWindows) {
+      Process.run('explorer.exe', [_dbDirPath]);
     }
   }
 
@@ -81,65 +116,320 @@ class _SettingsScreenState extends State<SettingsScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
-        title: const Text('系统与中枢设置', style: TextStyle(fontWeight: FontWeight.bold)),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // 1. AI 离线模型中心
-          _buildSectionHeader('AI 离线模型中心', Icons.memory_rounded),
-          Material(
-            color: AppColors.surface,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppColors.surfaceLight),
+        elevation: 0,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.settings_suggest_rounded, color: AppColors.primary, size: 20),
             ),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              title: const Text('AI 离线模型下载与管理', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  allModelsReady
-                      ? 'SenseVoice(230MB) / CAM++(25MB) / VAD(2MB) 全部就绪'
-                      : '检测到部分模型尚未下载，点击前往一键离线下载',
-                  style: TextStyle(
-                    color: allModelsReady ? Colors.greenAccent : Colors.orangeAccent,
-                    fontSize: 12,
-                  ),
+            const SizedBox(width: 12),
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '系统与中枢设置',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                Text(
+                  '本地 AI 引擎 · STT 转发 · 录音调优 · 存储管理',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 860),
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            physics: const BouncingScrollPhysics(),
+            children: [
+              // 1. AI 离线模型中枢
+              _buildSectionTitle(
+                title: 'AI 离线模型中枢',
+                subtitle: '本地神经网路推理资产管理与自检',
+                icon: Icons.memory_rounded,
+                iconColor: AppColors.primary,
+              ),
+              const SizedBox(height: 10),
+              _buildModelCenterCard(allModelsReady),
+              const SizedBox(height: 28),
+
+              // 2. 本地 STT API 转发中枢
+              _buildSectionTitle(
+                title: '本地 STT API 服务中枢',
+                subtitle: '兼容 OpenAI Whisper 接口协议的局域网与本地调用服务',
+                icon: Icons.wifi_tethering_rounded,
+                iconColor: AppColors.cyan,
+              ),
+              const SizedBox(height: 10),
+              _buildServerHubCard(isServerRunning),
+              const SizedBox(height: 28),
+
+              // 3. 录音与识别调优
+              _buildSectionTitle(
+                title: '音频采样与识别调优',
+                subtitle: 'VAD 端点检测灵敏度、角色抗漂移与语种偏好',
+                icon: Icons.tune_rounded,
+                iconColor: AppColors.amber,
+              ),
+              const SizedBox(height: 10),
+              _buildAudioTuningCard(),
+              const SizedBox(height: 28),
+
+              // 4. 数据存储与维护
+              _buildSectionTitle(
+                title: '数据存储与空间维护',
+                subtitle: 'SQLite 数据库、FTS5 全文索引与音频缓存清理',
+                icon: Icons.storage_rounded,
+                iconColor: AppColors.emerald,
+              ),
+              const SizedBox(height: 10),
+              _buildStorageMaintenanceCard(),
+              const SizedBox(height: 28),
+
+              // 5. 系统保活与关于 PolyScribe
+              _buildSectionTitle(
+                title: '系统保活与软件关于',
+                subtitle: '桌面端休眠防中断与客户端版本信息',
+                icon: Icons.shield_rounded,
+                iconColor: const Color(0xFFA855F7),
+              ),
+              const SizedBox(height: 10),
+              _buildAboutAndKeepAliveCard(),
+              const SizedBox(height: 36),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 优雅的分区标题栏
+  Widget _buildSectionTitle({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: iconColor),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 0.3,
                 ),
               ),
-              trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              onTap: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ModelManagerScreen()),
-                );
-                _loadSettingsData();
-              },
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 1. AI 模型卡片
+  Widget _buildModelCenterCard(bool allReady) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () async {
+            await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ModelManagerScreen()),
+            );
+            _loadSettingsData();
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                // 状态指示图标
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: allReady
+                        ? AppColors.emerald.withValues(alpha: 0.15)
+                        : AppColors.amber.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: allReady ? AppColors.emerald : AppColors.amber,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Icon(
+                    allReady ? Icons.check_circle_rounded : Icons.cloud_download_rounded,
+                    color: allReady ? AppColors.emerald : AppColors.amber,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            '离线 AI 语音模型包管理',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: allReady
+                                  ? AppColors.emerald.withValues(alpha: 0.15)
+                                  : AppColors.amber.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              allReady ? '全部就绪' : '待下载',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: allReady ? AppColors.emerald : AppColors.amber,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        allReady
+                            ? 'SenseVoice-Small(230MB) / CAM++声纹(25MB) / Silero-VAD(2MB) 本地资产完整'
+                            : 'SenseVoice / 声纹模型未就绪，点击进入一键下载与源切换',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.3),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceElevated,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.cardBorder),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('模型管理', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                      SizedBox(width: 4),
+                      Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppColors.textMuted),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 20),
+        ),
+      ),
+    );
+  }
 
-          // 2. 本地 STT API 转发中枢
-          _buildSectionHeader('本地 STT API 转发中枢', Icons.wifi_tethering_rounded),
-          Material(
-            color: AppColors.surface,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppColors.surfaceLight),
-            ),
-            child: Column(
+  /// 2. 本地 STT API 服务卡片
+  Widget _buildServerHubCard(bool isServerRunning) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
               children: [
-                SwitchListTile(
-                  title: const Text('本地 HTTP / WebSocket 转发服务', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
-                  subtitle: Text(
-                    isServerRunning
-                        ? '正在监听 :${AppConstants.defaultServerPort} (兼容 OpenAI Whisper 规范)'
-                        : '服务待机中，开启后第三方听书/翻译软件可直接调用',
-                    style: TextStyle(color: isServerRunning ? Colors.greenAccent : Colors.grey, fontSize: 11),
+                // 运行状态指示微光灯
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isServerRunning ? AppColors.emerald : AppColors.textMuted,
+                    boxShadow: isServerRunning
+                        ? [
+                            BoxShadow(
+                              color: AppColors.emerald.withValues(alpha: 0.6),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ]
+                        : null,
                   ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '本地 HTTP / WebSocket 转发服务',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        isServerRunning
+                            ? '正在监听 127.0.0.1:${AppConstants.defaultServerPort}，第三方软件可直接调用'
+                            : '服务待机中，开启后可用作系统级本地 Whisper 转录替代',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isServerRunning ? AppColors.emerald : AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
                   value: isServerRunning,
                   activeThumbColor: AppColors.primary,
                   onChanged: (val) {
@@ -147,161 +437,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Future.delayed(const Duration(milliseconds: 200), () => setState(() {}));
                   },
                 ),
-                const Divider(height: 1, color: AppColors.surfaceLight),
-                ListTile(
-                  title: const Text('打开服务控制台与调用日志', style: TextStyle(color: Colors.white, fontSize: 13)),
-                  trailing: const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ServerConsoleScreen(
-                          server: widget.localHttpServer,
-                          onToggleServer: widget.onToggleServer ?? () {},
-                        ),
-                      ),
-                    );
-                  },
-                ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-
-          // 3. 录音与识别调优
-          _buildSectionHeader('录音与识别调优', Icons.tune_rounded),
-          Material(
-            color: AppColors.surface,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppColors.surfaceLight),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('VAD 静音切片阈值', style: TextStyle(color: Colors.white, fontSize: 14)),
-                      Text('${_vadSilenceThreshold.toStringAsFixed(1)} 秒', style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  const Text('说话停顿超过该时长自动截断并转写为一句话', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                  Slider(
-                    value: _vadSilenceThreshold,
-                    min: 0.4,
-                    max: 2.0,
-                    divisions: 16,
-                    activeColor: AppColors.primary,
-                    onChanged: (val) {
-                      setState(() => _vadSilenceThreshold = val);
-                    },
-                  ),
-                  const Divider(color: AppColors.surfaceLight),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('短语音角色漂移抑制', style: TextStyle(color: Colors.white, fontSize: 14)),
-                    subtitle: const Text('对时长小于 0.8 秒的极短语音自动继承上一发言人，消除“嗯、啊、对”误识别', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                    value: _enableDriftSuppression,
-                    activeThumbColor: AppColors.primary,
-                    onChanged: (val) {
-                      setState(() => _enableDriftSuppression = val);
-                    },
-                  ),
-                  const Divider(color: AppColors.surfaceLight),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('识别语种偏好', style: TextStyle(color: Colors.white, fontSize: 14)),
-                      DropdownButton<String>(
-                        value: _preferredLanguage,
-                        dropdownColor: AppColors.surface,
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
-                        underline: const SizedBox(),
-                        items: const [
-                          DropdownMenuItem(value: 'auto', child: Text('自动识别 (中/粤/英/日/韩)')),
-                          DropdownMenuItem(value: 'zh', child: Text('强制简体中文')),
-                          DropdownMenuItem(value: 'en', child: Text('强制英语')),
-                        ],
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() => _preferredLanguage = val);
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 4. 数据维护与存储
-          _buildSectionHeader('数据维护与存储', Icons.storage_rounded),
-          Material(
-            color: AppColors.surface,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppColors.surfaceLight),
-            ),
-            child: Column(
-              children: [
-                ListTile(
-                  title: const Text('本地数据库占用', style: TextStyle(color: Colors.white, fontSize: 14)),
-                  subtitle: Text('SQLite + FTS5: $_dbSizeText', style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                  trailing: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white70,
-                      side: const BorderSide(color: AppColors.surfaceLight),
-                    ),
-                    onPressed: _vacuumDatabase,
-                    child: const Text('紧缩优化'),
+          const Divider(height: 1, color: AppColors.cardBorder),
+          InkWell(
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ServerConsoleScreen(
+                    server: widget.localHttpServer,
+                    onToggleServer: widget.onToggleServer ?? () {},
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 5. 关于与系统保活
-          _buildSectionHeader('关于与保活', Icons.info_outline_rounded),
-          Material(
-            color: AppColors.surface,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: AppColors.surfaceLight),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
+              );
+            },
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Row(
                 children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.battery_charging_full_rounded, color: Colors.greenAccent),
-                    title: const Text('后台保活与电池无限制策略', style: TextStyle(color: Colors.white, fontSize: 14)),
-                    subtitle: const Text('保证息屏或切后台时长录音不被系统杀死', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                    trailing: const Icon(Icons.open_in_new, size: 16, color: Colors.grey),
-                    onTap: () {
-                      KeepAliveService.instance.requestIgnoreBatteryOptimizations();
-                    },
+                  Icon(Icons.terminal_rounded, size: 18, color: AppColors.cyan),
+                  SizedBox(width: 10),
+                  Text(
+                    '进入服务控制台、查看调用日志与接口测试',
+                    style: TextStyle(fontSize: 13, color: AppColors.textPrimary, fontWeight: FontWeight.w500),
                   ),
-                  const Divider(color: AppColors.surfaceLight),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('客户端版本', style: TextStyle(color: Colors.white, fontSize: 14)),
-                        Text('${AppConstants.appEnglishName} ${AppConstants.appVersion}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                      ],
-                    ),
-                  ),
+                  Spacer(),
+                  Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.textMuted),
                 ],
               ),
             ),
@@ -311,20 +474,380 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSectionHeader(String title, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Row(
+  /// 3. 音频采样与识别调优卡片
+  Widget _buildAudioTuningCard() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 16, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey,
+          // VAD 静音切片阈值
+          Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'VAD 语音停顿截断阈值',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '说话连续停顿超过该秒数时，判定为句子结束并切片转写',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  '${_vadSilenceThreshold.toStringAsFixed(1)} 秒',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: AppColors.primary,
+              inactiveTrackColor: AppColors.surfaceElevated,
+              thumbColor: Colors.white,
+              overlayColor: AppColors.primaryGlow,
+              trackHeight: 4,
             ),
+            child: Slider(
+              value: _vadSilenceThreshold,
+              min: 0.4,
+              max: 2.0,
+              divisions: 16,
+              onChanged: (val) {
+                setState(() => _vadSilenceThreshold = val);
+              },
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('短句敏捷 (0.4s)', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                Text('推荐平衡 (0.8s)', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                Text('长段深沉 (2.0s)', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+              ],
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Divider(height: 1, color: AppColors.cardBorder),
+          ),
+
+          // 短语音角色漂移抑制
+          Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '短语音角色漂移抑制',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '对时长 < 0.8s 的单音节（如“嗯”、“对”）自动继承上一发言人，避免误判为新角色',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _enableDriftSuppression,
+                activeThumbColor: AppColors.primary,
+                onChanged: (val) {
+                  setState(() => _enableDriftSuppression = val);
+                },
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Divider(height: 1, color: AppColors.cardBorder),
+          ),
+
+          // 识别语种偏好
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '目标识别语种偏好',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'SenseVoice 具备出色的多语种混合能力，默认自动识别可兼顾中英粤日韩',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _buildLanguageChip('auto', '自动识别 (中/粤/英/日/韩)', Icons.auto_awesome_rounded),
+                  const SizedBox(width: 10),
+                  _buildLanguageChip('zh', '强制简体中文', Icons.translate_rounded),
+                  const SizedBox(width: 10),
+                  _buildLanguageChip('en', '强制英文', Icons.language_rounded),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 语种选项药丸胶囊
+  Widget _buildLanguageChip(String key, String label, IconData icon) {
+    final isSelected = _preferredLanguage == key;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () {
+          setState(() => _preferredLanguage = key);
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primary.withValues(alpha: 0.15) : AppColors.surfaceElevated,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isSelected ? AppColors.primary : AppColors.cardBorder,
+              width: isSelected ? 1.5 : 1.0,
+            ),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, size: 16, color: isSelected ? AppColors.primary : AppColors.textSecondary),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? Colors.white : AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 4. 存储与维护卡片
+  Widget _buildStorageMaintenanceCard() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.emerald.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.dns_rounded, color: AppColors.emerald, size: 20),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '本地 SQLite 核心数据库',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '包含任务历史、发言人声纹库与 FTS5 全文索引: $_dbSizeText',
+                      style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.surfaceElevated,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  side: const BorderSide(color: AppColors.cardBorder),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+                icon: _isVacuuming
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                      )
+                    : const Icon(Icons.cleaning_services_rounded, size: 16, color: AppColors.emerald),
+                label: Text(
+                  _isVacuuming ? '紧缩中...' : '紧缩优化',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+                onPressed: _isVacuuming ? null : _vacuumDatabase,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: AppColors.cardBorder),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.folder_open_rounded, size: 16, color: AppColors.textMuted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '存储目录：$_dbDirPath',
+                  style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: _openDataDirectory,
+                child: const Text('打开目录', style: TextStyle(fontSize: 12, color: AppColors.primary)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 5. 关于与保活卡片
+  Widget _buildAboutAndKeepAliveCard() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () {
+              KeepAliveService.instance.requestIgnoreBatteryOptimizations();
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.greenAccent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.battery_charging_full_rounded, color: Colors.greenAccent, size: 20),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '后台保活与电池无限制策略',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          '申请硬件锁与前台服务，防止长达数小时的长会议转录时电脑休眠中断',
+                          style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.open_in_new_rounded, size: 16, color: AppColors.textMuted),
+                ],
+              ),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Divider(height: 1, color: AppColors.cardBorder),
+          ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${AppConstants.appFullName} (${AppConstants.appEnglishName})',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '端到端完全离线 · 多角色声纹分离 · 本地长会议纪要中枢',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: const Text(
+                  AppConstants.appVersion,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

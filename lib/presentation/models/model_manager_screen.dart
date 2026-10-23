@@ -15,7 +15,7 @@ class ModelManagerScreen extends StatefulWidget {
 
 class _ModelManagerScreenState extends State<ModelManagerScreen> {
   final ModelDownloadService _downloadService = ModelDownloadService.instance;
-  ModelDownloadSource _selectedSource = ModelDownloadSource.modelScope;
+  ModelDownloadSource _selectedSource = ModelDownloadSource.official;
 
   final Map<String, bool> _installedStatus = {};
   String _modelDirectoryPath = '';
@@ -217,13 +217,13 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
-                        color: src == ModelDownloadSource.modelScope ? Colors.green.withValues(alpha: 0.2) : Colors.white10,
+                        color: Colors.green.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         src.badge,
-                        style: TextStyle(
-                          color: src == ModelDownloadSource.modelScope ? Colors.greenAccent : Colors.grey,
+                        style: const TextStyle(
+                          color: Colors.greenAccent,
                           fontSize: 10,
                         ),
                       ),

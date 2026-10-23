@@ -65,9 +65,12 @@ class ModelDownloadService {
   ModelDownloadService._() {
     _dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 10),
+      receiveTimeout: const Duration(minutes: 15),
       followRedirects: true,
-      maxRedirects: 5,
+      maxRedirects: 8,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
     ));
   }
 
@@ -103,10 +106,10 @@ class ModelDownloadService {
     return model.isInstalled(dir.path);
   }
 
-  /// 执行单个模型的下载与自动解压配置
+  /// 执行单个模型的下载与自动解压部署
   Future<bool> downloadModel(
     ModelPackageInfo model, {
-    ModelDownloadSource source = ModelDownloadSource.modelScope,
+    ModelDownloadSource source = ModelDownloadSource.official,
   }) async {
     final modelDir = await ModelManager.instance.getModelDirectory();
     final targetDirPath = modelDir.path;
@@ -123,81 +126,86 @@ class ModelDownloadService {
       errorMessage: null,
     ));
 
-    final url = model.getUrl(source);
-    debugPrint('[ModelDownload] 开始下载: ${model.name} 从 $url');
-
-    final tempFile = File(p.join(
-      targetDirPath,
-      'temp_${model.id}_${DateTime.now().millisecondsSinceEpoch}.${model.isArchive ? 'tar.bz2' : 'onnx'}',
-    ));
-
-    int lastTime = DateTime.now().millisecondsSinceEpoch;
-    int lastBytes = 0;
+    final items = model.getItems(source);
+    final totalModelBytes = model.estimatedSizeBytes;
+    int completedBaseBytes = 0;
 
     try {
-      await _dio.download(
-        url,
-        tempFile.path,
-        cancelToken: cancelToken,
-        onReceiveProgress: (received, total) {
-          final now = DateTime.now().millisecondsSinceEpoch;
-          final deltaTime = (now - lastTime) / 1000.0;
-          String speedStr = '';
+      for (int i = 0; i < items.length; i++) {
+        final item = items[i];
+        debugPrint('[ModelDownload] [${i + 1}/${items.length}] 开始下载: ${item.url}');
 
-          if (deltaTime >= 0.5) {
-            final deltaBytes = received - lastBytes;
-            final bytesPerSec = deltaBytes / deltaTime;
-            if (bytesPerSec >= 1024 * 1024) {
-              speedStr = '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
-            } else {
-              speedStr = '${(bytesPerSec / 1024).toStringAsFixed(0)} KB/s';
-            }
-            lastTime = now;
-            lastBytes = received;
-          }
-
-          final effectiveTotal = total > 0 ? total : model.estimatedSizeBytes;
-          final pRatio = (received / effectiveTotal).clamp(0.0, 0.99);
-
-          _updateState(model.id, (s) => s.copyWith(
-            status: ModelTaskStatus.downloading,
-            progress: pRatio,
-            receivedBytes: received,
-            totalBytes: effectiveTotal,
-            speed: speedStr.isEmpty ? s.speed : speedStr,
-          ));
-        },
-      );
-
-      _cancelTokens.remove(model.id);
-
-      // 解压与重命名归整
-      if (model.isArchive) {
-        _updateState(model.id, (s) => s.copyWith(
-          status: ModelTaskStatus.extracting,
-          progress: 0.99,
-          speed: '正在解压并校验...',
+        final tempFile = File(p.join(
+          targetDirPath,
+          'temp_${model.id}_${i}_${DateTime.now().millisecondsSinceEpoch}.${item.isArchive ? 'tar.bz2' : 'bin'}',
         ));
 
-        await compute(_extractAndAlignArchive, {
-          'archivePath': tempFile.path,
-          'targetDirPath': targetDirPath,
-          'modelId': model.id,
-        });
+        int lastTime = DateTime.now().millisecondsSinceEpoch;
+        int lastBytes = 0;
 
-        // 删除临时压缩包
-        if (tempFile.existsSync()) {
-          await tempFile.delete();
+        await _dio.download(
+          item.url,
+          tempFile.path,
+          cancelToken: cancelToken,
+          onReceiveProgress: (received, total) {
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final deltaTime = (now - lastTime) / 1000.0;
+            String speedStr = '';
+
+            if (deltaTime >= 0.5) {
+              final deltaBytes = received - lastBytes;
+              final bytesPerSec = deltaBytes / deltaTime;
+              if (bytesPerSec >= 1024 * 1024) {
+                speedStr = '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+              } else {
+                speedStr = '${(bytesPerSec / 1024).toStringAsFixed(0)} KB/s';
+              }
+              lastTime = now;
+              lastBytes = received;
+            }
+
+            final currentOverallReceived = completedBaseBytes + received;
+            final pRatio = (currentOverallReceived / totalModelBytes).clamp(0.0, 0.98);
+
+            _updateState(model.id, (s) => s.copyWith(
+              status: ModelTaskStatus.downloading,
+              progress: pRatio,
+              receivedBytes: currentOverallReceived,
+              totalBytes: totalModelBytes,
+              speed: speedStr.isEmpty ? s.speed : speedStr,
+            ));
+          },
+        );
+
+        // 处理该下载项：解压或就地重命名
+        if (item.isArchive) {
+          _updateState(model.id, (s) => s.copyWith(
+            status: ModelTaskStatus.extracting,
+            speed: '正在解压并校验权重...',
+          ));
+
+          await compute(_extractAndAlignArchive, {
+            'archivePath': tempFile.path,
+            'targetDirPath': targetDirPath,
+            'modelId': model.id,
+          });
+
+          if (tempFile.existsSync()) {
+            await tempFile.delete();
+          }
+        } else {
+          final destPath = p.join(targetDirPath, item.destinationFileName);
+          final destFile = File(destPath);
+          if (destFile.existsSync()) {
+            await destFile.delete();
+          }
+          await tempFile.rename(destPath);
         }
-      } else {
-        // 单个 ONNX 文件直接重命名到目标文件
-        final destPath = p.join(targetDirPath, model.targetFileNames.first);
-        final destFile = File(destPath);
-        if (destFile.existsSync()) {
-          await destFile.delete();
-        }
-        await tempFile.rename(destPath);
+
+        completedBaseBytes += item.estimatedSizeBytes;
       }
+
+      _cancelTokens.remove(model.id);
 
       _updateState(model.id, (s) => s.copyWith(
         status: ModelTaskStatus.completed,
@@ -205,16 +213,11 @@ class ModelDownloadService {
         speed: '已就绪',
       ));
 
-      // 重新解析模型就绪状态
+      // 重新扫描并更新全局引擎状态
       await ModelManager.instance.resolveModels();
       return true;
     } catch (e) {
       _cancelTokens.remove(model.id);
-      if (tempFile.existsSync()) {
-        try {
-          await tempFile.delete();
-        } catch (_) {}
-      }
 
       if (CancelToken.isCancel(e as dynamic)) {
         debugPrint('[ModelDownload] 下载被用户主动取消: ${model.id}');
@@ -232,7 +235,7 @@ class ModelDownloadService {
 
   /// 一键下载所有未就绪的模型
   Future<void> downloadAllMissingModels({
-    ModelDownloadSource source = ModelDownloadSource.modelScope,
+    ModelDownloadSource source = ModelDownloadSource.official,
   }) async {
     for (final model in PredefinedModels.all) {
       final isInstalled = await checkInstalled(model);
@@ -242,16 +245,15 @@ class ModelDownloadService {
     }
   }
 
-  /// 检查各模型在云端的最新版本与本地对比
+  /// 检查各模型版本状态
   Future<Map<String, String>> checkModelUpdates() async {
-    // 模拟版本检查协议，可对齐远程 manifest 或内置最新版本号
     final Map<String, String> updateNotes = {};
     for (final model in PredefinedModels.all) {
       final installed = await checkInstalled(model);
       if (!installed) {
-        updateNotes[model.id] = '待下载 (最新版本: ${model.version})';
+        updateNotes[model.id] = '待下载 (最新版: ${model.version})';
       } else {
-        updateNotes[model.id] = '已是最新版 (${model.version})';
+        updateNotes[model.id] = '已就绪 (当前: ${model.version})';
       }
     }
     return updateNotes;
@@ -264,7 +266,7 @@ class ModelDownloadService {
   }
 }
 
-/// 顶层后台解压处理函数（在 compute 独立线程中执行，避免阻塞主 UI 线程）
+/// 顶层后台解压处理函数（在 compute 独立线程中执行，杜绝阻塞主 UI 线程）
 void _extractAndAlignArchive(Map<String, dynamic> params) {
   final archivePath = params['archivePath'] as String;
   final targetDirPath = params['targetDirPath'] as String;
@@ -283,7 +285,7 @@ void _extractAndAlignArchive(Map<String, dynamic> params) {
     final fileContent = file.content as List<int>;
 
     if (modelId == PredefinedModels.senseVoiceSmall.id) {
-      if (filename.endsWith('model.int8.onnx')) {
+      if (filename.endsWith('model.int8.onnx') || filename.endsWith('model.onnx')) {
         File(p.join(targetDirPath, 'sensevoice_small_int8.onnx'))
           ..createSync(recursive: true)
           ..writeAsBytesSync(fileContent);

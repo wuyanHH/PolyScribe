@@ -9,23 +9,21 @@ void main() {
 
       final senseVoice = PredefinedModels.senseVoiceSmall;
       expect(senseVoice.id, 'sensevoice_small');
-      expect(senseVoice.isArchive, true);
       expect(senseVoice.targetFileNames, contains('sensevoice_small_int8.onnx'));
       expect(senseVoice.targetFileNames, contains('tokens.txt'));
 
       final vad = PredefinedModels.sileroVad;
       expect(vad.id, 'silero_vad');
-      expect(vad.isArchive, false);
       expect(vad.targetFileNames, contains('silero_vad.onnx'));
     });
 
     test('多镜像源 URL 映射解析验证', () {
       final senseVoice = PredefinedModels.senseVoiceSmall;
-      final msUrl = senseVoice.getUrl(ModelDownloadSource.modelScope);
-      final ghUrl = senseVoice.getUrl(ModelDownloadSource.github);
+      final msItems = senseVoice.getItems(ModelDownloadSource.modelScope);
+      final offItems = senseVoice.getItems(ModelDownloadSource.official);
 
-      expect(msUrl.contains('modelscope.cn'), true);
-      expect(ghUrl.contains('github.com'), true);
+      expect(msItems.any((it) => it.url.contains('modelscope.cn')), true);
+      expect(offItems.any((it) => it.url.contains('github.com')), true);
     });
 
     test('ModelDownloadService 单例与版本检查测试', () async {
