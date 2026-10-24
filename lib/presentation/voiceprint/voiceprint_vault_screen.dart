@@ -51,54 +51,59 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
 
   Future<void> _addNewVoicePrint() async {
     final nameController = TextEditingController();
-    final personName = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 22),
-            SizedBox(width: 10),
-            Text('新建实名声纹档案', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '预设联系人实名档案。在实时会议或纪要详情页标注对应发言人后，系统将通过 EMA 指数平滑持续融合其 192 维声纹质心。',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5, height: 1.45),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: nameController,
-              autofocus: true,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: '例如: 张总 / 李工程师 / 客户王经理',
-                hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
-                filled: true,
-                fillColor: AppColors.background,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    String? personName;
+    try {
+      personName = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 22),
+              SizedBox(width: 10),
+              Text('新建实名声纹档案', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '预设联系人实名档案。在实时会议或纪要详情页标注对应发言人后，系统将通过 EMA 指数平滑持续融合其 192 维声纹质心。',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5, height: 1.45),
               ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: '例如: 张总 / 李工程师 / 客户王经理',
+                  hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+                  filled: true,
+                  fillColor: AppColors.background,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, nameController.text.trim()),
+              child: const Text('创建档案', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, nameController.text.trim()),
-            child: const Text('创建档案', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      nameController.dispose();
+    }
 
     if (personName != null && personName.isNotEmpty) {
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -120,35 +125,40 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
 
   Future<void> _renameVoicePrint(VoicePrint vp) async {
     final ctrl = TextEditingController(text: vp.personName);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('修改声纹档案姓名', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: AppColors.background,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    String? newName;
+    try {
+      newName = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('修改声纹档案姓名', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: AppColors.background,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      ctrl.dispose();
+    }
 
     if (newName != null && newName.isNotEmpty && newName != vp.personName) {
       await AppDatabase.instance.updateVoicePrintName(vp.id, newName);
@@ -202,12 +212,14 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredVoicePrints;
+    final isCompact = MediaQuery.of(context).size.width < 600;
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        titleSpacing: isCompact ? 12 : 20,
         title: Row(
           children: [
             Container(
@@ -216,37 +228,47 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
                 color: AppColors.primary.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.fingerprint_rounded, color: AppColors.primary, size: 20),
+              child: const Icon(Icons.fingerprint_rounded, color: AppColors.primary, size: 19),
             ),
-            const SizedBox(width: 12),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '实名声纹特征库',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-                Text(
-                  'CAM++ 192维特征向量 · 在线质心池 EMA 平滑演进',
-                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
-                ),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '实名声纹特征库',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (!isCompact)
+                    const Text(
+                      'CAM++ 192维特征向量 · 在线质心池 EMA 平滑演进',
+                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 14),
+            padding: const EdgeInsets.only(right: 12),
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
                 elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: EdgeInsets.symmetric(horizontal: isCompact ? 10 : 14, vertical: 8),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
-              icon: const Icon(Icons.person_add_alt_1_rounded, size: 17),
-              label: const Text('录入新声纹', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.person_add_alt_1_rounded, size: 16),
+              label: Text(
+                isCompact ? '新建声纹' : '录入新声纹',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
               onPressed: _addNewVoicePrint,
             ),
           ),
@@ -258,63 +280,110 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 920),
                 child: ListView(
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(isCompact ? 14 : 20),
                   physics: const BouncingScrollPhysics(),
                   children: [
                     _buildSensitivityCard(),
-                    const SizedBox(height: 22),
-                    Row(
-                      children: [
-                        const Text(
-                          '已沉淀的实名特征档案',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(10),
+                    SizedBox(height: isCompact ? 16 : 22),
+                    if (isCompact) ...[
+                      Row(
+                        children: [
+                          const Text(
+                            '已沉淀的实名特征档案',
+                            style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold, color: Colors.white),
                           ),
-                          child: Text(
-                            '${_voicePrints.length} 人',
-                            style: const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const Spacer(),
-                        if (_voicePrints.isNotEmpty)
-                          SizedBox(
-                            width: 220,
-                            child: TextField(
-                              controller: _searchController,
-                              style: const TextStyle(color: Colors.white, fontSize: 12.5),
-                              decoration: InputDecoration(
-                                hintText: '搜索联系人姓名...',
-                                hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
-                                prefixIcon: const Icon(Icons.search_rounded, size: 17, color: AppColors.textMuted),
-                                isDense: true,
-                                filled: true,
-                                fillColor: AppColors.surface,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: AppColors.cardBorder),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: AppColors.cardBorder),
-                                ),
-                              ),
-                              onChanged: (v) => setState(() => _searchQuery = v),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${_voicePrints.length} 人',
+                              style: const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                           ),
+                        ],
+                      ),
+                      if (_voicePrints.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _searchController,
+                          style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                          decoration: InputDecoration(
+                            hintText: '搜索联系人姓名...',
+                            hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                            prefixIcon: const Icon(Icons.search_rounded, size: 17, color: AppColors.textMuted),
+                            isDense: true,
+                            filled: true,
+                            fillColor: AppColors.surface,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: AppColors.cardBorder),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: const BorderSide(color: AppColors.cardBorder),
+                            ),
+                          ),
+                          onChanged: (v) => setState(() => _searchQuery = v),
+                        ),
                       ],
-                    ),
-                    const SizedBox(height: 14),
+                    ] else
+                      Row(
+                        children: [
+                          const Text(
+                            '已沉淀的实名特征档案',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${_voicePrints.length} 人',
+                              style: const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_voicePrints.isNotEmpty)
+                            SizedBox(
+                              width: 220,
+                              child: TextField(
+                                controller: _searchController,
+                                style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                                decoration: InputDecoration(
+                                  hintText: '搜索联系人姓名...',
+                                  hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                                  prefixIcon: const Icon(Icons.search_rounded, size: 17, color: AppColors.textMuted),
+                                  isDense: true,
+                                  filled: true,
+                                  fillColor: AppColors.surface,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: AppColors.cardBorder),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(color: AppColors.cardBorder),
+                                  ),
+                                ),
+                                onChanged: (v) => setState(() => _searchQuery = v),
+                              ),
+                            ),
+                        ],
+                      ),
+                    const SizedBox(height: 12),
                     if (filtered.isEmpty)
                       _buildEmptyVaultState()
                     else
-                      ...filtered.asMap().entries.map((entry) => _buildVoicePrintCard(entry.value, entry.key)),
+                      ...filtered.asMap().entries.map((entry) => _buildVoicePrintCard(entry.value, entry.key, isCompact: isCompact)),
                   ],
                 ),
               ),
@@ -372,7 +441,7 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
 
   Widget _buildSensitivityCard() {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -382,18 +451,18 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Row(
-                children: [
-                  Icon(Icons.radar_rounded, size: 18, color: AppColors.primary),
-                  SizedBox(width: 8),
-                  Text(
-                    '声纹余弦相似度判同阈值 (Cosine Similarity)',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                ],
+              const Icon(Icons.radar_rounded, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '声纹余弦相似度判同阈值',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                 decoration: BoxDecoration(
@@ -454,14 +523,14 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
     );
   }
 
-  Widget _buildVoicePrintCard(VoicePrint vp, int index) {
+  Widget _buildVoicePrintCard(VoicePrint vp, int index, {required bool isCompact}) {
     final spkColor = AppColors.getSpeakerColor(null, index: index);
     final dt = DateTime.fromMillisecondsSinceEpoch(vp.updatedAt);
     final dateStr = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(isCompact ? 12 : 16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(14),
@@ -470,30 +539,34 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
       child: Row(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: isCompact ? 38 : 44,
+            height: isCompact ? 38 : 44,
             decoration: BoxDecoration(
               color: spkColor.surfaceColor,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(color: spkColor.color.withValues(alpha: 0.5), width: 1.2),
             ),
             child: Center(
               child: Text(
                 vp.personName.isNotEmpty ? vp.personName.substring(0, 1) : '?',
-                style: TextStyle(color: spkColor.color, fontWeight: FontWeight.bold, fontSize: 17),
+                style: TextStyle(color: spkColor.color, fontWeight: FontWeight.bold, fontSize: isCompact ? 15 : 17),
               ),
             ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Text(
-                      vp.personName,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                    Flexible(
+                      child: Text(
+                        vp.personName,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14.5),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                     const SizedBox(width: 8),
                     Container(
@@ -503,7 +576,7 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        '采样融合 ${vp.sampleCount} 次',
+                        '融合 ${vp.sampleCount} 次',
                         style: TextStyle(color: spkColor.color, fontSize: 10.5, fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -511,21 +584,26 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'CAM++ ${vp.embedding.length}维归一化质心向量 • 更新于 $dateStr',
+                  '${vp.embedding.length}维声纹向量 • 更新于 $dateStr',
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-          // 192维特征指纹迷你声波装饰
-          _buildEmbeddingFingerprintBar(vp, spkColor.color),
-          const SizedBox(width: 12),
+          if (!isCompact) ...[
+            _buildEmbeddingFingerprintBar(vp, spkColor.color),
+            const SizedBox(width: 12),
+          ],
           IconButton(
+            visualDensity: VisualDensity.compact,
             tooltip: '重命名联系人',
             icon: const Icon(Icons.edit_outlined, size: 18, color: AppColors.textSecondary),
             onPressed: () => _renameVoicePrint(vp),
           ),
           IconButton(
+            visualDensity: VisualDensity.compact,
             tooltip: '移除声纹档案',
             icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.textMuted),
             onPressed: () => _deleteVoicePrint(vp),

@@ -47,6 +47,21 @@ class OnlineCentroidBank {
     }
   }
 
+  /// 对声纹向量执行 L2 单位超球面归一化
+  static Float32List normalizeL2(Float32List vec) {
+    double sumSq = 0.0;
+    for (int i = 0; i < vec.length; i++) {
+      sumSq += vec[i] * vec[i];
+    }
+    final norm = sqrt(sumSq);
+    if (norm <= 1e-12) return vec;
+    final out = Float32List(vec.length);
+    for (int i = 0; i < vec.length; i++) {
+      out[i] = vec[i] / norm;
+    }
+    return out;
+  }
+
   /// 注册预设实名声纹库（例如“张总”、“李工”）
   void registerKnownVoicePrints(List<VoicePrint> prints) {
     _knownVoicePrints.clear();
@@ -65,12 +80,14 @@ class OnlineCentroidBank {
     required int startMs,
     required int endMs,
   }) {
-    // 1. 极短语音漂移抑制 (短于 800ms)
+    final normEmb = normalizeL2(embedding);
     final gap = startMs - _lastSpeechEndMs;
-    if (durationMs < AppConstants.minValidSpeechMs &&
-        _lastSpeakerId != null &&
-        gap <= AppConstants.maxSpeakerShiftGapMs) {
-      // 继承上一说话人，且该段离散特征不参与质心迭代
+
+    // 1. 连续发言时序平滑与短语音漂移抑制 (自然呼吸间隔 2.5 秒以内且时长较短时平滑继承)
+    if (_lastSpeakerId != null &&
+        gap >= 0 &&
+        gap <= AppConstants.maxSpeakerShiftGapMs &&
+        durationMs < AppConstants.minValidSpeechMs) {
       _lastSpeechEndMs = endMs;
       return CentroidMatchResult(
         speakerId: _lastSpeakerId!,
@@ -80,11 +97,11 @@ class OnlineCentroidBank {
       );
     }
 
-    // 2. 首先比对实名声纹库
+    // 2. 比对实名声纹库
     double maxKnownSim = -1.0;
     VoicePrint? matchedKnown;
     for (final known in _knownVoicePrints) {
-      final sim = known.cosineSimilarity(embedding);
+      final sim = known.cosineSimilarity(normEmb);
       if (sim > maxKnownSim) {
         maxKnownSim = sim;
         matchedKnown = known;
@@ -96,38 +113,46 @@ class OnlineCentroidBank {
     double maxCentroidSim = -1.0;
 
     for (final entry in _centroids.entries) {
-      final sim = _cosineSimilarity(embedding, entry.value);
+      final sim = _cosineSimilarity(normEmb, entry.value);
       if (sim > maxCentroidSim) {
         maxCentroidSim = sim;
         bestSpeakerId = entry.key;
       }
     }
 
+    // 短语音匹配时允许适当宽容阈值 (-0.05)，防止特征微弱漂移新建角色
+    final effectiveThreshold = durationMs < AppConstants.minValidSpeechMs
+        ? (similarityThreshold - 0.05).clamp(0.45, 0.70)
+        : similarityThreshold;
+
     String finalSpeakerId;
     String? finalSpeakerName;
     bool isNew = false;
     double reportedSim = 0.0;
 
-    if (maxCentroidSim >= similarityThreshold && bestSpeakerId != null) {
-      // 命中已有角色，执行 EMA 质心平滑演进
+    if (maxCentroidSim >= effectiveThreshold && bestSpeakerId != null) {
+      // 命中已有角色
       finalSpeakerId = bestSpeakerId;
       reportedSim = maxCentroidSim;
       finalSpeakerName = _speakerNames[bestSpeakerId];
-      _updateCentroid(bestSpeakerId, embedding);
-    } else if (matchedKnown != null && maxKnownSim >= similarityThreshold) {
+      // 仅当该切片时长足够长 (>=1200ms) 且特征质量高时，才允许参与质心迭代，杜绝质心被短噪污染！
+      if (durationMs >= AppConstants.minValidSpeechMs) {
+        _updateCentroid(bestSpeakerId, normEmb);
+      }
+    } else if (matchedKnown != null && maxKnownSim >= effectiveThreshold) {
       // 命中实名声纹库
       finalSpeakerId = 'SPK_${_nextSpeakerIndex.toString().padLeft(2, '0')}';
       _nextSpeakerIndex++;
       finalSpeakerName = matchedKnown.personName;
-      _centroids[finalSpeakerId] = Float32List.fromList(embedding);
+      _centroids[finalSpeakerId] = Float32List.fromList(normEmb);
       _speakerNames[finalSpeakerId] = finalSpeakerName;
       reportedSim = maxKnownSim;
       isNew = true;
     } else {
-      // 判定为新角色
+      // 判定为新角色 (必须达到一定时长，避免偶发环境异音单独立角)
       finalSpeakerId = 'SPK_${_nextSpeakerIndex.toString().padLeft(2, '0')}';
       _nextSpeakerIndex++;
-      _centroids[finalSpeakerId] = Float32List.fromList(embedding);
+      _centroids[finalSpeakerId] = Float32List.fromList(normEmb);
       reportedSim = maxCentroidSim > 0 ? maxCentroidSim : 0.0;
       isNew = true;
     }
@@ -143,31 +168,91 @@ class OnlineCentroidBank {
     );
   }
 
-  /// 计算余弦相似度
+  /// 计算余弦相似度 (入参必须已 L2 归一化)
   double _cosineSimilarity(Float32List a, Float32List b) {
     if (a.length != b.length) return 0.0;
     double dot = 0.0;
-    double normA = 0.0;
-    double normB = 0.0;
     for (int i = 0; i < a.length; i++) {
-      final va = a[i];
-      final vb = b[i];
-      dot += va * vb;
-      normA += va * va;
-      normB += vb * vb;
+      dot += a[i] * b[i];
     }
-    if (normA <= 0.0 || normB <= 0.0) return 0.0;
-    return dot / (sqrt(normA) * sqrt(normB));
+    return dot;
   }
 
-  /// 指数移动平均更新质心向量
+  /// 指数移动平均更新质心向量并执行严格 L2 投影归一化 (防质心模长衰减与漂移)
   void _updateCentroid(String speakerId, Float32List newVector) {
     final current = _centroids[speakerId];
     if (current == null || current.length != newVector.length) return;
 
+    double sumSq = 0.0;
     for (int i = 0; i < current.length; i++) {
-      current[i] = (emaAlpha * current[i]) + ((1.0 - emaAlpha) * newVector[i]);
+      final v = (emaAlpha * current[i]) + ((1.0 - emaAlpha) * newVector[i]);
+      current[i] = v;
+      sumSq += v * v;
     }
+
+    final norm = sqrt(sumSq);
+    if (norm > 1e-12) {
+      for (int i = 0; i < current.length; i++) {
+        current[i] /= norm;
+      }
+    }
+  }
+
+  /// 全局多角色后处理凝聚聚类与合并 (彻底消除“同一个人由于初期声音波动被误切为多个角色”)
+  ///
+  /// 返回各个待合并角色重定向映射关系：例如 {'SPK_02': 'SPK_01', 'SPK_03': 'SPK_01'}
+  Map<String, String> consolidateSpeakers({double mergeThreshold = 0.50}) {
+    final spkIds = _centroids.keys.toList()..sort();
+    if (spkIds.length <= 1) return {};
+
+    // 简单并查集
+    final parent = <String, String>{};
+    for (final id in spkIds) {
+      parent[id] = id;
+    }
+
+    String find(String x) {
+      if (parent[x] != x) {
+        parent[x] = find(parent[x]!);
+      }
+      return parent[x]!;
+    }
+
+    void union(String a, String b) {
+      final rootA = find(a);
+      final rootB = find(b);
+      if (rootA != rootB) {
+        // 优先保留字典序较小 (即出现更早) 的编号
+        if (rootA.compareTo(rootB) < 0) {
+          parent[rootB] = rootA;
+        } else {
+          parent[rootA] = rootB;
+        }
+      }
+    }
+
+    // 两两比对余弦相似度
+    for (int i = 0; i < spkIds.length; i++) {
+      for (int j = i + 1; j < spkIds.length; j++) {
+        final idA = spkIds[i];
+        final idB = spkIds[j];
+        final sim = _cosineSimilarity(_centroids[idA]!, _centroids[idB]!);
+        if (sim >= mergeThreshold) {
+          union(idA, idB);
+        }
+      }
+    }
+
+    // 构建映射字典
+    final Map<String, String> mapping = {};
+    for (final id in spkIds) {
+      final root = find(id);
+      if (root != id) {
+        mapping[id] = root;
+      }
+    }
+
+    return mapping;
   }
 
   /// 重置当前会议质心状态

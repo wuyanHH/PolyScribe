@@ -62,11 +62,16 @@ class ModelPackageInfo {
     required this.downloadItems,
   });
 
-  /// 检查该模型在目标目录下是否已经完整就绪
+  /// 检查该模型在目标目录下是否已经完整就绪 (校验最小有效字节数，防止残损文件被误判为已安装)
   bool isInstalled(String targetDirectory) {
     for (final fileName in targetFileNames) {
       final file = File(p.join(targetDirectory, fileName));
-      if (!file.existsSync() || file.lengthSync() == 0) {
+      if (!file.existsSync()) {
+        return false;
+      }
+      final len = file.lengthSync();
+      final minRequired = fileName.endsWith('.onnx') ? 100 * 1024 : 1024;
+      if (len < minRequired) {
         return false;
       }
     }

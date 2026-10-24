@@ -74,5 +74,23 @@ void main() {
       expect(json['segments'], isNotEmpty);
       expect(json['segments'][0]['speaker'], '张总');
     });
+
+    test('POST /v1/audio/transcriptions 标准 Multipart/form-data 文件上传测试', () async {
+      final uri = Uri.parse('http://127.0.0.1:$testPort/v1/audio/transcriptions');
+      final request = http.MultipartRequest('POST', uri);
+      request.files.add(http.MultipartFile.fromBytes(
+        'file',
+        [10, 20, 30, 40, 50],
+        filename: 'meeting_audio.wav',
+      ));
+      request.fields['model'] = 'whisper-1';
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      expect(response.statusCode, 200);
+      final json = jsonDecode(response.body);
+      expect(json['text'], '交付节点必须严格遵守。');
+    });
   });
 }

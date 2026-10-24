@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
@@ -11,9 +12,29 @@ import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../data/models/transcript_segment.dart';
 import '../../data/models/voice_print.dart';
+import '../../engine/text/transcript_context_optimizer.dart';
 import '../../services/export_center_service.dart';
 import '../../services/sync_play_controller.dart';
 import '../../services/task_queue_service.dart';
+
+/// 同一发言人连续发言聚合组 (用于提升播放页布局密度与对话流阅读体验)
+class _SpeakerUtteranceGroup {
+  final String speakerId;
+  final String speakerName;
+  final int startMs;
+  final int endMs;
+  final List<TranscriptSegment> segments;
+  final List<int> originalIndices;
+
+  _SpeakerUtteranceGroup({
+    required this.speakerId,
+    required this.speakerName,
+    required this.startMs,
+    required this.endMs,
+    required this.segments,
+    required this.originalIndices,
+  });
+}
 
 /// 音字同步播放与纪要详情页 (桌面双栏洞察工作台 + 发言人实名入库 + 段落校对 + 多格式本地导出)
 class SyncPlayerScreen extends StatefulWidget {
@@ -35,11 +56,14 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   bool _isLoading = true;
   String _currentTitle = '';
   String? _selectedSpeakerFilter; // null 表示查看全部发言人
+  bool _isGroupedView = true; // 是否开启会话流聚合模式 (按发言人将连续发言整合归并在同一个气泡组，大幅提升显示效率)
 
   /// 自动滚动与跟读吸附状态管理
   bool _autoScrollEnabled = true; // 是否开启随播放进度自动吸附
   bool _userScrolledAway = false; // 用户是否主动向上/向下翻阅历史对话
   int _lastAutoScrolledIndex = -1; // 上次自动滚动的段落序号，防止同一段重复微颤
+  Timer? _searchDebounceTimer;
+  int _lastUiRenderTimestamp = 0;
 
   @override
   void initState() {
@@ -74,7 +98,14 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
         _scrollController.hasClients) {
       _scrollToIndex(state.activeSegmentIndex);
     }
-    setState(() {});
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // 性能优化：若处于同一段落内且非段落跨越，将高频播放位置引起的全页面重建平滑节流至 >= 80ms 一次
+    if (state.activeSegmentIndex != _lastAutoScrolledIndex ||
+        now - _lastUiRenderTimestamp >= 80) {
+      _lastUiRenderTimestamp = now;
+      setState(() {});
+    }
   }
 
   /// 精准平滑自适应居中滚动，确保当前段落呈现在视口 35% 黄金线上，上方留白看前文，绝不超出屏幕
@@ -110,16 +141,24 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     }
   }
 
-  void _performSearch(String query) async {
-    if (query.trim().isEmpty) {
+  /// 纪要内全文检索 (250ms 防抖收敛与防并发竞态)
+  void _performSearch(String query) {
+    _searchDebounceTimer?.cancel();
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
       setState(() {
         _searchResults = [];
       });
       return;
     }
-    final results = await AppDatabase.instance.searchSegments(query.trim());
-    setState(() {
-      _searchResults = results.where((s) => s.taskId == widget.task.id).toList();
+
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 250), () async {
+      final results = await AppDatabase.instance.searchSegments(trimmed);
+      if (mounted && _searchController.text.trim() == trimmed) {
+        setState(() {
+          _searchResults = results.where((s) => s.taskId == widget.task.id).toList();
+        });
+      }
     });
   }
 
@@ -144,108 +183,84 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   Future<void> _editSpeakerRoleName(String speakerId, String currentName) async {
     final nameCtrl = TextEditingController(text: currentName);
     bool saveToVoiceprintVault = true;
+    bool? confirmed;
+    String newName = '';
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: AppColors.surfaceElevated,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              const Icon(Icons.record_voice_over_rounded, color: AppColors.primary, size: 22),
-              const SizedBox(width: 10),
-              Text('标注发言人姓名 ($speakerId)', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+    try {
+      confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            backgroundColor: AppColors.surfaceElevated,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                const Icon(Icons.record_voice_over_rounded, color: AppColors.primary, size: 22),
+                const SizedBox(width: 10),
+                Text('标注发言人姓名 ($speakerId)', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '修改后，本篇纪要中该角色的所有发言段落将统一更新为此姓名。',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: '输入真实姓名或职位，如：张总 / 产品经理',
+                    hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+                    filled: true,
+                    fillColor: AppColors.background,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: saveToVoiceprintVault,
+                  activeColor: AppColors.primary,
+                  title: const Text(
+                    '同步沉淀至「实名声纹特征库」',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: const Text(
+                    '后续新会议自动比对声纹向量并直呼其名',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  ),
+                  onChanged: (v) => setDialogState(() => saveToVoiceprintVault = v ?? true),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存应用', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
             ],
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '修改后，本篇纪要中该角色的所有发言段落将统一更新为此姓名。',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: nameCtrl,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: '输入真实姓名或职位，如：张总 / 产品经理',
-                  hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
-                  filled: true,
-                  fillColor: AppColors.background,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-              const SizedBox(height: 12),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: saveToVoiceprintVault,
-                activeColor: AppColors.primary,
-                title: const Text(
-                  '同步沉淀至「实名声纹特征库」',
-                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
-                ),
-                subtitle: const Text(
-                  '后续新会议自动比对声纹向量并直呼其名',
-                  style: TextStyle(color: AppColors.textMuted, fontSize: 11),
-                ),
-                onChanged: (v) => setDialogState(() => saveToVoiceprintVault = v ?? true),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存应用', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
         ),
-      ),
-    );
+      );
+      newName = nameCtrl.text.trim();
+    } finally {
+      nameCtrl.dispose();
+    }
+    if (confirmed == true && newName.isNotEmpty && newName != currentName) {
+      // 1. 【性能关键：零延迟乐观更新】内存与状态毫秒级瞬时刷新，绝对不重载音频播放器
+      _controller.updateSpeakerName(speakerId, newName);
+      setState(() {});
 
-    final newName = nameCtrl.text.trim();
-    if (confirmed == true && newName.isNotEmpty) {
-      await AppDatabase.instance.updateSpeakerNameForTask(widget.task.id, speakerId, newName);
-
-      if (saveToVoiceprintVault) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        final existingPrints = await AppDatabase.instance.getAllVoicePrints();
-        final matched = existingPrints.where((p) => p.personName == newName).toList();
-        if (matched.isNotEmpty) {
-          final current = matched.first;
-          await AppDatabase.instance.saveVoicePrint(
-            VoicePrint(
-              id: current.id,
-              personName: newName,
-              embedding: current.embedding,
-              sampleCount: current.sampleCount + 1,
-              createdAt: current.createdAt,
-              updatedAt: now,
-            ),
-          );
-        } else {
-          await AppDatabase.instance.saveVoicePrint(
-            VoicePrint(
-              id: 'vp_$now',
-              personName: newName,
-              embedding: Float32List(192),
-              sampleCount: 1,
-              createdAt: now,
-              updatedAt: now,
-            ),
-          );
-        }
-      }
-
-      await _loadSegments();
       if (mounted) {
         AppToast.success(
           context,
@@ -254,6 +269,140 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
               : '已将本篇纪要中的 $speakerId 更新为「$newName」',
         );
       }
+
+      // 2. 异步在后台持久化落库与更新声纹特征库，绝不阻塞 UI
+      unawaited(() async {
+        try {
+          await AppDatabase.instance.updateSpeakerNameForTask(widget.task.id, speakerId, newName);
+
+          if (saveToVoiceprintVault) {
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final existingPrints = await AppDatabase.instance.getAllVoicePrints();
+            final matched = existingPrints.where((p) => p.personName == newName).toList();
+            if (matched.isNotEmpty) {
+              final current = matched.first;
+              await AppDatabase.instance.saveVoicePrint(
+                VoicePrint(
+                  id: current.id,
+                  personName: newName,
+                  embedding: current.embedding,
+                  sampleCount: current.sampleCount + 1,
+                  createdAt: current.createdAt,
+                  updatedAt: now,
+                ),
+              );
+            } else {
+              await AppDatabase.instance.saveVoicePrint(
+                VoicePrint(
+                  id: 'vp_$now',
+                  personName: newName,
+                  embedding: Float32List(192),
+                  sampleCount: 1,
+                  createdAt: now,
+                  updatedAt: now,
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('[SyncPlayerScreen] 异步持久化发言人姓名异常: $e');
+        }
+      }());
+    }
+  }
+
+  /// 智能整合上下文与同发言人碎片断句 (解决停顿导致的断句过碎、一句话拆成两半)
+  Future<void> _optimizeContextAndMerge() async {
+    final all = _controller.segments;
+    if (all.length <= 1) {
+      AppToast.info(context, '当前纪要段落较少，无需额外整合优化');
+      return;
+    }
+
+    final preview = TranscriptContextOptimizer.optimize(all);
+    if (preview.mergedCount == 0) {
+      AppToast.info(context, '当前上下文已处于最佳状态，未检测到需合并的碎片断句');
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.auto_fix_high_rounded, color: AppColors.primary, size: 22),
+            SizedBox(width: 10),
+            Text('智能整合上下文与断句', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '检测到当前纪要中存在 ${preview.mergedCount} 处由于呼吸停顿被切开的同一发言人碎片短句。',
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 13, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.background,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('• 原始段落：${preview.originalCount} 段', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text('• 优化后段落：${preview.optimizedCount} 段 (合并 ${preview.mergedCount} 处)', style: const TextStyle(color: AppColors.emerald, fontSize: 12.5, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  const Text('• 智能连缀标点与语流，保留精准音频时间戳与跳播定位', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              '确认立即对本篇纪要执行上下文整合优化吗？',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+            icon: const Icon(Icons.auto_awesome, size: 16),
+            onPressed: () => Navigator.pop(ctx, true),
+            label: const Text('立即整合优化', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      setState(() => _isLoading = true);
+      try {
+        final saved = await AppDatabase.instance.replaceSegmentsForTask(widget.task.id, preview.segments);
+        _controller.updateSegments(saved);
+        if (mounted) {
+          AppToast.success(context, '已成功优化整合上下文，合并了 ${preview.mergedCount} 处碎片断句！');
+        }
+      } catch (e) {
+        if (mounted) {
+          AppToast.error(context, '整合优化失败: $e');
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+      }
     }
   }
 
@@ -261,56 +410,75 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   Future<void> _editSegmentText(TranscriptSegment seg) async {
     if (seg.id == null) return;
     final textCtrl = TextEditingController(text: seg.text);
-    final newText = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            const Icon(Icons.edit_note_rounded, color: AppColors.primary, size: 22),
-            const SizedBox(width: 8),
-            Text(
-              '校对段落文本 (${_formatTime(seg.startMs)})',
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+    String? newText;
+    try {
+      newText = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.edit_note_rounded, color: AppColors.primary, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '校对段落文本 (${_formatTime(seg.startMs)})',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: TextField(
+              controller: textCtrl,
+              autofocus: true,
+              maxLines: 5,
+              minLines: 2,
+              style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: AppColors.background,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, textCtrl.text.trim()),
+              child: const Text('保存校对'),
             ),
           ],
         ),
-        content: SizedBox(
-          width: 480,
-          child: TextField(
-            controller: textCtrl,
-            autofocus: true,
-            maxLines: 5,
-            minLines: 2,
-            style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: AppColors.background,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, textCtrl.text.trim()),
-            child: const Text('保存校对'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      textCtrl.dispose();
+    }
 
     if (newText != null && newText.isNotEmpty && newText != seg.text) {
-      await AppDatabase.instance.updateSegmentText(seg.id!, widget.task.id, newText);
-      await _loadSegments();
+      final safeText = newText;
+      // 内存立即响应
+      _controller.updateSegmentText(seg.id!, safeText);
+      setState(() {});
+
       if (mounted) {
-        AppToast.success(context, '段落文本已校对更新并同步全文索引');
+        AppToast.success(context, '段落文本已校对更新');
       }
+
+      unawaited(() async {
+        try {
+          await AppDatabase.instance.updateSegmentText(seg.id!, widget.task.id, safeText);
+        } catch (e) {
+          debugPrint('[SyncPlayerScreen] 异步保存段落文本异常: $e');
+        }
+      }());
     }
   }
 
@@ -381,7 +549,9 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     );
 
     if (confirmed == true && mounted) {
-      await AppDatabase.instance.deleteTask(widget.task.id, deleteAudioFile: deleteLocalAudio);
+      // 停止播放并通知队列如果正在处理则立即取消中断并流转
+      _controller.pause();
+      await TaskQueueService.instance.cancelOrDeleteTask(widget.task.id, deleteAudioFile: deleteLocalAudio);
       if (mounted) {
         AppToast.info(context, '纪要记录已成功删除');
         Navigator.pop(context, true);
@@ -454,40 +624,46 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   /// 重命名纪要标题
   Future<void> _renameTitle() async {
     final textController = TextEditingController(text: _currentTitle);
-    final newTitle = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('重命名会议纪要', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: textController,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: AppColors.background,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    String? newTitle;
+    try {
+      newTitle = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('重命名会议纪要', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: textController,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: AppColors.background,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, textController.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, textController.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      textController.dispose();
+    }
 
     if (newTitle != null && newTitle.isNotEmpty && newTitle != _currentTitle) {
-      await AppDatabase.instance.updateTaskTitle(widget.task.id, newTitle);
+      final safeTitle = newTitle;
+      await AppDatabase.instance.updateTaskTitle(widget.task.id, safeTitle);
       setState(() {
-        _currentTitle = newTitle;
+        _currentTitle = safeTitle;
       });
     }
   }
@@ -496,14 +672,15 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   void _showExportDialog() {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.surfaceElevated,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
         return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(18),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -512,9 +689,11 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                   children: [
                     Icon(Icons.ios_share_rounded, color: AppColors.primary, size: 20),
                     SizedBox(width: 8),
-                    Text(
-                      '多格式生产力导出中心',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                    Expanded(
+                      child: Text(
+                        '多格式生产力导出中心',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -527,53 +706,63 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 ...ExportFormat.values.map((format) {
                   return Container(
                     margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: AppColors.cardBorder),
                     ),
-                    child: ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.description_outlined, color: AppColors.primary, size: 20),
-                      title: Text(
-                        format.label,
-                        style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextButton.icon(
-                            icon: const Icon(Icons.copy_rounded, size: 15, color: AppColors.textSecondary),
-                            label: const Text('复制', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                            onPressed: () {
-                              final content = ExportCenterService.formatContent(
-                                task: widget.task.copyWith(title: _currentTitle),
-                                segments: _controller.segments,
-                                format: format,
-                              );
-                              Clipboard.setData(ClipboardData(text: content));
-                              Navigator.pop(ctx);
-                              AppToast.success(context, '${format.label} 已复制到剪贴板');
-                            },
+                    child: Row(
+                      children: [
+                        const Icon(Icons.description_outlined, color: AppColors.primary, size: 19),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            format.label,
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(width: 4),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary.withValues(alpha: 0.18),
-                              foregroundColor: AppColors.primary,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                            icon: const Icon(Icons.save_alt_rounded, size: 15),
-                            label: const Text('存为文件', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              await _exportToFileOnDisk(format);
-                            },
+                        ),
+                        const SizedBox(width: 6),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                        ],
-                      ),
+                          icon: const Icon(Icons.copy_rounded, size: 14, color: AppColors.textSecondary),
+                          label: const Text('复制', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                          onPressed: () {
+                            final content = ExportCenterService.formatContent(
+                              task: widget.task.copyWith(title: _currentTitle),
+                              segments: _controller.segments,
+                              format: format,
+                            );
+                            Clipboard.setData(ClipboardData(text: content));
+                            Navigator.pop(ctx);
+                            AppToast.success(context, '${format.label} 已复制到剪贴板');
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary.withValues(alpha: 0.18),
+                            foregroundColor: AppColors.primary,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          icon: const Icon(Icons.save_alt_rounded, size: 14),
+                          label: const Text('存文件', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          onPressed: () async {
+                            Navigator.pop(ctx);
+                            await _exportToFileOnDisk(format);
+                          },
+                        ),
+                      ],
                     ),
                   );
                 }),
@@ -623,6 +812,7 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _controller.removeListener(_onPlayerStateChanged);
     _controller.dispose();
     _scrollController.dispose();
@@ -689,6 +879,26 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 }
               },
             ),
+          // 会话流聚合 / 逐句卡片 视图切换
+          IconButton(
+            tooltip: _isGroupedView ? '当前为：会话流聚合模式 (高密度，点击切换逐句卡片)' : '当前为：逐句卡片模式 (点击切换会话流聚合)',
+            icon: Icon(
+              _isGroupedView ? Icons.chat_bubble_outline_rounded : Icons.view_stream_rounded,
+              size: 20,
+              color: _isGroupedView ? AppColors.primary : AppColors.textMuted,
+            ),
+            onPressed: () {
+              setState(() {
+                _isGroupedView = !_isGroupedView;
+              });
+            },
+          ),
+          // 智能整合上下文与断句快捷按钮
+          IconButton(
+            tooltip: '智能整合上下文与断句 (合并同一发言人碎片短句)',
+            icon: const Icon(Icons.auto_fix_high_rounded, color: AppColors.primary, size: 20),
+            onPressed: _optimizeContextAndMerge,
+          ),
           TextButton.icon(
             style: TextButton.styleFrom(foregroundColor: AppColors.primary),
             icon: const Icon(Icons.ios_share_rounded, size: 18),
@@ -718,6 +928,8 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             onSelected: (value) {
               if (value == 'rename') {
                 _renameTitle();
+              } else if (value == 'optimize_context') {
+                _optimizeContextAndMerge();
               } else if (value == 'retranscribe') {
                 _confirmRetranscribeTask();
               } else if (value == 'copy_all') {
@@ -736,6 +948,16 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                     Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
                     SizedBox(width: 8),
                     Text('重命名纪要', style: TextStyle(color: Colors.white, fontSize: 13)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'optimize_context',
+                child: Row(
+                  children: [
+                    Icon(Icons.auto_fix_high_rounded, size: 18, color: AppColors.primary),
+                    SizedBox(width: 8),
+                    Text('智能整合上下文与断句', style: TextStyle(color: Colors.white, fontSize: 13)),
                   ],
                 ),
               ),
@@ -812,25 +1034,51 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                                   ? const Center(
                                       child: Text('暂无转写段落', style: TextStyle(color: AppColors.textMuted)),
                                     )
-                                  : ListView.builder(
-                                      controller: _scrollController,
-                                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
-                                      itemCount: visibleSegments.length,
-                                      itemBuilder: (context, idx) {
-                                        final seg = visibleSegments[idx];
-                                        final realIndex = allSegments.indexOf(seg);
-                                        final isActive = state.activeSegmentIndex == realIndex;
-                                        final speakerColor = AppColors.getSpeakerColor(seg.speakerId);
+                                  : _isGroupedView
+                                      ? Builder(builder: (context) {
+                                          final groups = _groupSegments(visibleSegments, allSegments);
+                                          return ListView.builder(
+                                            controller: _scrollController,
+                                            padding: EdgeInsets.fromLTRB(
+                                              MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                              12,
+                                              MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                              48,
+                                            ),
+                                            itemCount: groups.length,
+                                            itemBuilder: (context, idx) {
+                                              return _buildGroupedUtteranceCard(
+                                                groups[idx],
+                                                state,
+                                                isAudioAvailable,
+                                              );
+                                            },
+                                          );
+                                        })
+                                      : ListView.builder(
+                                          controller: _scrollController,
+                                          padding: EdgeInsets.fromLTRB(
+                                            MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                            12,
+                                            MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                            48,
+                                          ),
+                                          itemCount: visibleSegments.length,
+                                          itemBuilder: (context, idx) {
+                                            final seg = visibleSegments[idx];
+                                            final realIndex = allSegments.indexOf(seg);
+                                            final isActive = state.activeSegmentIndex == realIndex;
+                                            final speakerColor = AppColors.getSpeakerColor(seg.speakerId);
 
-                                        return _buildSegmentCard(
-                                          seg,
-                                          realIndex,
-                                          isActive,
-                                          speakerColor,
-                                          isAudioAvailable,
-                                        );
-                                      },
-                                    ),
+                                            return _buildSegmentCard(
+                                              seg,
+                                              realIndex,
+                                              isActive,
+                                              speakerColor,
+                                              isAudioAvailable,
+                                            );
+                                          },
+                                        ),
                             ),
                             // 用户翻阅历史离开当前行时，右下角优雅悬浮「回到播放行」药丸提示
                             if (_userScrolledAway && isAudioAvailable && state.activeSegmentIndex >= 0)
@@ -1016,6 +1264,50 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 _buildSidebarMetricRow('总计字数', '$totalWords 字'),
                 const SizedBox(height: 8),
                 _buildSidebarMetricRow('参会角色数', '${speakerStats.length} 人'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          // 桌面端专属：智能整合上下文快捷操作卡片
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.auto_fix_high_rounded, color: AppColors.primary, size: 20),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '智能整合上下文',
+                        style: TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.bold),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        '一键优化断句并归并同角色短语',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 10.5),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _optimizeContextAndMerge,
+                  child: const Text('优化断句', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                ),
               ],
             ),
           ),
@@ -1234,6 +1526,250 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     );
   }
 
+  /// 将段落列表按同发言人连续发言聚合为会话组
+  List<_SpeakerUtteranceGroup> _groupSegments(
+    List<TranscriptSegment> visibleSegments,
+    List<TranscriptSegment> allSegments,
+  ) {
+    if (visibleSegments.isEmpty) return [];
+
+    final List<_SpeakerUtteranceGroup> groups = [];
+    _SpeakerUtteranceGroup? currentGroup;
+
+    for (final seg in visibleSegments) {
+      final realIndex = allSegments.indexOf(seg);
+      final roleName = seg.speakerName ?? AppColors.getSpeakerColor(seg.speakerId).defaultRoleName;
+
+      // 判定同发言人且发音间隔 <= 15 秒，聚合在同一个卡片内
+      if (currentGroup != null &&
+          currentGroup.speakerId == seg.speakerId &&
+          (seg.startMs - currentGroup.endMs) <= 15000) {
+        currentGroup.segments.add(seg);
+        currentGroup.originalIndices.add(realIndex);
+        if (seg.endMs > currentGroup.endMs) {
+          final updatedGroup = _SpeakerUtteranceGroup(
+            speakerId: currentGroup.speakerId,
+            speakerName: roleName,
+            startMs: currentGroup.startMs,
+            endMs: seg.endMs,
+            segments: currentGroup.segments,
+            originalIndices: currentGroup.originalIndices,
+          );
+          groups[groups.length - 1] = updatedGroup;
+          currentGroup = updatedGroup;
+        }
+      } else {
+        currentGroup = _SpeakerUtteranceGroup(
+          speakerId: seg.speakerId,
+          speakerName: roleName,
+          startMs: seg.startMs,
+          endMs: seg.endMs,
+          segments: [seg],
+          originalIndices: [realIndex],
+        );
+        groups.add(currentGroup);
+      }
+    }
+
+    return groups;
+  }
+
+  /// 会话流聚合发言人卡片 (同一发言人的多次发言聚合在一个卡片中，极大提升排版紧凑度与会话感)
+  Widget _buildGroupedUtteranceCard(
+    _SpeakerUtteranceGroup group,
+    SyncPlayerState state,
+    bool isAudioAvailable,
+  ) {
+    final speakerColor = AppColors.getSpeakerColor(group.speakerId);
+    final hasActiveSentence = group.originalIndices.contains(state.activeSegmentIndex);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: hasActiveSentence ? speakerColor.color.withValues(alpha: 0.6) : AppColors.cardBorder,
+          width: hasActiveSentence ? 1.2 : 1.0,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. 发言人卡片头部：头像 + 姓名 (点击极速改名) + 起止时间 + 句数
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+            decoration: BoxDecoration(
+              color: speakerColor.color.withValues(alpha: 0.05),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+              border: const Border(bottom: BorderSide(color: AppColors.cardBorder, width: 0.6)),
+            ),
+            child: Row(
+              children: [
+                // 发言人头像与姓名 (独立点击改名，杜绝手势竞争冲突)
+                InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () => _editSpeakerRoleName(group.speakerId, group.speakerName),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            color: speakerColor.color.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: speakerColor.color, width: 1.2),
+                          ),
+                          child: Center(
+                            child: Text(
+                              group.speakerName.isNotEmpty ? group.speakerName.characters.first : '?',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: speakerColor.color,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          group.speakerName,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: speakerColor.color,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 13,
+                          color: speakerColor.color.withValues(alpha: 0.7),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                // 起止总时间
+                Text(
+                  '${_formatTime(group.startMs)} - ${_formatTime(group.endMs)}',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: AppColors.textMuted),
+                ),
+                if (group.segments.length > 1) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppColors.cardBorder),
+                    ),
+                    child: Text(
+                      '${group.segments.length} 句',
+                      style: const TextStyle(fontSize: 10.5, color: AppColors.textMuted),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // 2. 连续发言句子流 (紧凑、优雅、高可读性)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List.generate(group.segments.length, (i) {
+                final seg = group.segments[i];
+                final realIndex = group.originalIndices[i];
+                final isSentenceActive = state.activeSegmentIndex == realIndex;
+                final itemKey = _itemKeys.putIfAbsent(realIndex, () => GlobalKey());
+
+                return AnimatedContainer(
+                  key: itemKey,
+                  duration: const Duration(milliseconds: 180),
+                  margin: EdgeInsets.only(bottom: i == group.segments.length - 1 ? 0 : 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isSentenceActive
+                        ? speakerColor.color.withValues(alpha: 0.14)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isSentenceActive
+                          ? speakerColor.color.withValues(alpha: 0.4)
+                          : Colors.transparent,
+                    ),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () {
+                      setState(() {
+                        _userScrolledAway = false;
+                        _autoScrollEnabled = true;
+                      });
+                      _controller.seekToSegment(realIndex);
+                      _scrollToIndex(realIndex, force: true);
+                    },
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 当前播放标识 (跳动声波或淡时间)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2, right: 8),
+                          child: isSentenceActive
+                              ? Icon(Icons.graphic_eq_rounded, size: 15, color: speakerColor.color)
+                              : Text(
+                                  _formatTime(seg.startMs),
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 11,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ),
+                        ),
+                        // 文本内容
+                        Expanded(
+                          child: Text(
+                            seg.text,
+                            style: TextStyle(
+                              fontSize: 14,
+                              height: 1.5,
+                              color: isSentenceActive
+                                  ? Colors.white
+                                  : AppColors.textPrimary.withValues(alpha: 0.9),
+                              fontWeight: isSentenceActive ? FontWeight.w600 : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        // 快捷校对小图标
+                        Tooltip(
+                          message: '校对修改此句',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(4),
+                            onTap: () => _editSegmentText(seg),
+                            child: const Padding(
+                              padding: EdgeInsets.all(2),
+                              child: Icon(Icons.edit_note_rounded, size: 16, color: AppColors.textMuted),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 段落卡片 (轻触卡片执行音频精准 Seek 跳转，点击发言人可改名，点击编辑图标可校对文本)
   Widget _buildSegmentCard(
     TranscriptSegment seg,
@@ -1359,10 +1895,10 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     );
   }
 
-  /// 纯纪要只读底栏 (当音频文件不存在时)
+  /// 纯纪要只读底栏 (当音频文件不存在时，自适应窄屏不溢出)
   Widget _buildReadOnlyBottomBar(int segmentCount) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.cardBorder)),
@@ -1371,15 +1907,23 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
         top: false,
         child: Row(
           children: [
-            const Icon(Icons.menu_book_rounded, size: 18, color: AppColors.textMuted),
+            const Icon(Icons.menu_book_rounded, size: 17, color: AppColors.textMuted),
             const SizedBox(width: 8),
-            Text(
-              '共 $segmentCount 个段落 • 点击角色标签可标注实名声纹',
-              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            Expanded(
+              child: Text(
+                '共 $segmentCount 段 • 点击角色标签可标注声纹',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-            const Spacer(),
             TextButton.icon(
-              icon: const Icon(Icons.copy_rounded, size: 16, color: AppColors.primary),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: const Icon(Icons.copy_rounded, size: 15, color: AppColors.primary),
               label: const Text('复制全文', style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold)),
               onPressed: () {
                 final text = _controller.segments.map((s) => '${s.speakerName ?? s.speakerId}: ${s.text}').join('\n');
@@ -1393,14 +1937,15 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     );
   }
 
-  /// 底部播放器控制舱
+  /// 底部播放器控制舱 (窄屏自适应，彻底移除硬编码宽度溢出)
   Widget _buildBottomPlayerBar(SyncPlayerState state, int totalSegments) {
     final progress = state.durationMs > 0
         ? (state.positionMs / state.durationMs).clamp(0.0, 1.0)
         : 0.0;
+    final isCompact = MediaQuery.of(context).size.width < 600;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
+      padding: EdgeInsets.fromLTRB(isCompact ? 12 : 20, 6, isCompact ? 12 : 20, isCompact ? 10 : 14),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.cardBorder, width: 1)),
@@ -1449,87 +1994,107 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
               ],
             ),
             Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // 倍速切换胶囊
-                OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: const BorderSide(color: AppColors.cardBorder),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    minimumSize: Size.zero,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                // 左侧：倍速切换胶囊
+                SizedBox(
+                  width: 56,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: const BorderSide(color: AppColors.cardBorder),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    onPressed: () {
+                      final rates = [0.75, 1.0, 1.25, 1.5, 2.0];
+                      final curIdx = rates.indexOf(state.playbackRate);
+                      final nextRate = rates[(curIdx + 1) % rates.length];
+                      _controller.setPlaybackRate(nextRate);
+                    },
+                    child: Text(
+                      '${state.playbackRate}x',
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                  onPressed: () {
-                    final rates = [0.75, 1.0, 1.25, 1.5, 2.0];
-                    final curIdx = rates.indexOf(state.playbackRate);
-                    final nextRate = rates[(curIdx + 1) % rates.length];
-                    _controller.setPlaybackRate(nextRate);
-                  },
-                  child: Text(
-                    '${state.playbackRate}x',
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
                 ),
-                const SizedBox(width: 14),
-                // 上一段
-                IconButton(
-                  tooltip: '上一段发言',
-                  icon: const Icon(Icons.skip_previous_rounded, color: Colors.white70),
-                  onPressed: state.activeSegmentIndex > 0
-                      ? () => _controller.seekToSegment(state.activeSegmentIndex - 1)
-                      : null,
-                ),
-                // 快退 5 秒
-                IconButton(
-                  tooltip: '快退 5 秒',
-                  icon: const Icon(Icons.replay_5_rounded, color: Colors.white),
-                  onPressed: () => _controller.seek(state.positionMs - 5000),
-                ),
-                const SizedBox(width: 8),
-                // 播放/暂停大按钮
-                InkWell(
-                  onTap: _controller.togglePlay,
-                  borderRadius: BorderRadius.circular(28),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.primaryDark],
-                      ),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.35),
-                          blurRadius: 10,
-                          offset: const Offset(0, 3),
+                // 中央：播放控制按钮组
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '上一段发言',
+                      icon: const Icon(Icons.skip_previous_rounded, color: Colors.white70),
+                      onPressed: state.activeSegmentIndex > 0
+                          ? () => _controller.seekToSegment(state.activeSegmentIndex - 1)
+                          : null,
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '快退 5 秒',
+                      icon: const Icon(Icons.replay_5_rounded, color: Colors.white),
+                      onPressed: () => _controller.seek(state.positionMs - 5000),
+                    ),
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: _controller.togglePlay,
+                      borderRadius: BorderRadius.circular(26),
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.primary, AppColors.primaryDark],
+                          ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primary.withValues(alpha: 0.35),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
                         ),
-                      ],
+                        child: Icon(
+                          state.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 26,
+                        ),
+                      ),
                     ),
-                    child: Icon(
-                      state.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 28,
+                    const SizedBox(width: 6),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '快进 5 秒',
+                      icon: const Icon(Icons.forward_5_rounded, color: Colors.white),
+                      onPressed: () => _controller.seek(state.positionMs + 5000),
                     ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '下一段发言',
+                      icon: const Icon(Icons.skip_next_rounded, color: Colors.white70),
+                      onPressed: (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < totalSegments - 1)
+                          ? () => _controller.seekToSegment(state.activeSegmentIndex + 1)
+                          : null,
+                    ),
+                  ],
+                ),
+                // 右侧对称段落进度指示 (保持播放按钮严格居中且不溢出)
+                SizedBox(
+                  width: 56,
+                  child: Text(
+                    state.activeSegmentIndex >= 0
+                        ? '${state.activeSegmentIndex + 1}/$totalSegments'
+                        : '$totalSegments段',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppColors.textMuted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 8),
-                // 快进 5 秒
-                IconButton(
-                  tooltip: '快进 5 秒',
-                  icon: const Icon(Icons.forward_5_rounded, color: Colors.white),
-                  onPressed: () => _controller.seek(state.positionMs + 5000),
-                ),
-                // 下一段
-                IconButton(
-                  tooltip: '下一段发言',
-                  icon: const Icon(Icons.skip_next_rounded, color: Colors.white70),
-                  onPressed: (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < totalSegments - 1)
-                      ? () => _controller.seekToSegment(state.activeSegmentIndex + 1)
-                      : null,
-                ),
-                const SizedBox(width: 32),
               ],
             ),
           ],

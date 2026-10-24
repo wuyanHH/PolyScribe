@@ -60,10 +60,18 @@ class LocalHttpServer {
         List<int> audioBytes = [];
         String filename = 'audio.wav';
 
+        final rawBody = await request.read().expand((chunk) => chunk).toList();
+
         if (contentType.contains('multipart/form-data')) {
-          audioBytes = await request.read().expand((chunk) => chunk).toList();
+          // 深度解包 multipart/form-data 二进制报文，提取纯净音频二进制流与文件名
+          final extracted = _extractAudioFromMultipart(rawBody, contentType);
+          audioBytes = extracted.audioBytes;
+          if (extracted.filename.isNotEmpty) {
+            filename = extracted.filename;
+          }
         } else {
-          audioBytes = await request.read().expand((chunk) => chunk).toList();
+          // application/octet-stream 或直接二进制音频推流
+          audioBytes = rawBody;
         }
 
         if (audioBytes.isEmpty) {
@@ -210,5 +218,113 @@ class LocalHttpServer {
     await _server?.close(force: true);
     _server = null;
     debugPrint('[LocalHttpServer] 服务已停止');
+  }
+
+  /// 从 multipart/form-data 原始字节报文中提取纯净音频二进制流与文件名
+  static ({List<int> audioBytes, String filename}) _extractAudioFromMultipart(
+    List<int> bodyBytes,
+    String contentType,
+  ) {
+    if (bodyBytes.isEmpty) {
+      return (audioBytes: <int>[], filename: 'audio.wav');
+    }
+
+    // 1. 尝试从 Content-Type 头解析 boundary 字符串
+    String? boundary;
+    final boundaryMatch = RegExp(r'boundary=([^;]+)', caseSensitive: false).firstMatch(contentType);
+    if (boundaryMatch != null) {
+      boundary = boundaryMatch.group(1)?.trim();
+      if (boundary != null && boundary.startsWith('"') && boundary.endsWith('"') && boundary.length > 2) {
+        boundary = boundary.substring(1, boundary.length - 1);
+      }
+    }
+
+    // 2. 如果未指定 boundary，尝试从报文首行自动探测 (首行通常形如 --boundary)
+    if (boundary == null || boundary.isEmpty) {
+      final firstLineEnd = _indexOfByteSeq(bodyBytes, [13, 10], 0);
+      if (firstLineEnd > 2) {
+        final firstLineStr = utf8.decode(bodyBytes.sublist(0, firstLineEnd), allowMalformed: true);
+        if (firstLineStr.startsWith('--')) {
+          boundary = firstLineStr.substring(2).trim();
+        }
+      }
+    }
+
+    if (boundary != null && boundary.isNotEmpty) {
+      final delimiter = utf8.encode('--$boundary');
+      final firstDelimiterIdx = _indexOfByteSeq(bodyBytes, delimiter, 0);
+
+      if (firstDelimiterIdx >= 0) {
+        final headerStart = firstDelimiterIdx + delimiter.length;
+        // 查找头信息结束标志 (\r\n\r\n 或 \n\n)
+        int headerEnd = _indexOfByteSeq(bodyBytes, [13, 10, 13, 10], headerStart);
+        int dataStart = headerEnd >= 0 ? headerEnd + 4 : -1;
+
+        if (headerEnd < 0) {
+          headerEnd = _indexOfByteSeq(bodyBytes, [10, 10], headerStart);
+          dataStart = headerEnd >= 0 ? headerEnd + 2 : -1;
+        }
+
+        if (dataStart >= 0 && dataStart < bodyBytes.length) {
+          // 解析 Header 中的 filename
+          String foundFilename = 'audio.wav';
+          final headerBytes = bodyBytes.sublist(headerStart, headerEnd);
+          final headerStr = utf8.decode(headerBytes, allowMalformed: true);
+          final filenameMatch = RegExp(r'filename="?([^";\r\n]+)"?', caseSensitive: false).firstMatch(headerStr);
+          if (filenameMatch != null) {
+            foundFilename = filenameMatch.group(1)?.trim() ?? 'audio.wav';
+          }
+
+          // 寻找下一个 boundary 标志
+          final nextDelimiterIdx = _indexOfByteSeq(bodyBytes, delimiter, dataStart);
+          int dataEnd = nextDelimiterIdx >= 0 ? nextDelimiterIdx : bodyBytes.length;
+
+          // 剥离尾部的 \r\n (CRLF) 或 \n (LF)
+          if (dataEnd >= 2 && bodyBytes[dataEnd - 2] == 13 && bodyBytes[dataEnd - 1] == 10) {
+            dataEnd -= 2;
+          } else if (dataEnd >= 1 && bodyBytes[dataEnd - 1] == 10) {
+            dataEnd -= 1;
+          }
+
+          if (dataEnd > dataStart) {
+            return (
+              audioBytes: bodyBytes.sublist(dataStart, dataEnd),
+              filename: foundFilename,
+            );
+          }
+        }
+      }
+    }
+
+    // 3. 兜底方案：智能扫描 RIFF 头部 (针对 WAV 音频)
+    final riffIdx = _indexOfByteSeq(bodyBytes, [0x52, 0x49, 0x46, 0x46], 0); // "RIFF"
+    if (riffIdx >= 0 && riffIdx + 12 <= bodyBytes.length) {
+      final waveIdx = _indexOfByteSeq(bodyBytes, [0x57, 0x41, 0x56, 0x45], riffIdx); // "WAVE"
+      if (waveIdx == riffIdx + 8) {
+        return (audioBytes: bodyBytes.sublist(riffIdx), filename: 'audio.wav');
+      }
+    }
+
+    return (audioBytes: bodyBytes, filename: 'audio.wav');
+  }
+
+  /// 在字节数组中高效定位指定子序列索引
+  static int _indexOfByteSeq(List<int> source, List<int> pattern, int start) {
+    if (pattern.isEmpty || start + pattern.length > source.length) return -1;
+    final first = pattern[0];
+    final max = source.length - pattern.length;
+
+    for (int i = start; i <= max; i++) {
+      if (source[i] != first) continue;
+      bool match = true;
+      for (int j = 1; j < pattern.length; j++) {
+        if (source[i + j] != pattern[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return i;
+    }
+    return -1;
   }
 }

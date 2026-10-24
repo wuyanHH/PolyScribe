@@ -75,4 +75,77 @@ void main() {
 
     await db.close();
   });
+
+  test('FTS5 全文索引与参数清洗容错测试', () async {
+    final db = await databaseFactory.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE tasks (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              source_type TEXT NOT NULL,
+              audio_path TEXT NOT NULL,
+              duration_ms INTEGER DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              status TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE segments (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              task_id TEXT NOT NULL,
+              speaker_id TEXT NOT NULL,
+              speaker_name TEXT,
+              start_ms INTEGER NOT NULL,
+              end_ms INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              words_json TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE VIRTUAL TABLE segments_fts USING fts5(
+              text,
+              task_id UNINDEXED,
+              segment_id UNINDEXED
+            )
+          ''');
+        },
+      ),
+    );
+
+    // 插入测试段落
+    final s1 = TranscriptSegment(
+      taskId: 't_fts_1',
+      speakerId: 'SPK_01',
+      speakerName: '李架构师',
+      startMs: 0,
+      endMs: 3000,
+      text: 'SenseVoice 离线语音识别在本地流畅运行。',
+    );
+    final id1 = await db.insert('segments', s1.toMap());
+    await db.insert('segments_fts', {
+      'rowid': id1,
+      'text': s1.text,
+      'task_id': s1.taskId,
+      'segment_id': id1,
+    });
+
+    // 1. 验证带特殊字符 (如 * 号、双引号、括号) 不导致崩溃
+    final dirtyQuery = '*"SenseVoice"*';
+    final sanitized = dirtyQuery.replaceAll(RegExp(r'["\*\(\)\{\}\[\]\:\^\+\-\~]'), ' ').trim();
+    expect(sanitized, 'SenseVoice');
+
+    final ftsExpr = '"$sanitized"*';
+    final ftsHits = await db.rawQuery(
+      'SELECT segment_id FROM segments_fts WHERE text MATCH ? LIMIT 50',
+      [ftsExpr],
+    );
+    expect(ftsHits, isNotEmpty);
+    expect(ftsHits.first['segment_id'], id1);
+
+    await db.close();
+  });
 }

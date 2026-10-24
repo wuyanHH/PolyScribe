@@ -268,11 +268,12 @@ class WavCodec {
     }
 
     final rms = sqrt(sumSq / samples.length);
-    // 若存在有效声音信号 (非绝对死寂) 且峰值偏低，则自动放大至最佳识别电平 (0.85)，最大增益限制为 25 倍
+    // 高保真响度保护：对微弱录音 (Peak < 0.65 且非纯死寂) 进行平滑适度归一化 (目标峰值 0.75，最大增益限幅 15 倍)
+    // 杜绝 25+ 倍过度拉伸导致的削顶失真，同时兼顾低电平微弱音频的清晰度
     if (peak > 0.002 && rms > 0.0003 && peak < 0.65) {
-      final gain = min(0.85 / peak, 25.0);
+      final gain = min(0.75 / peak, 15.0);
       for (int i = 0; i < samples.length; i++) {
-        samples[i] = (samples[i] * gain).clamp(-1.0, 1.0);
+        samples[i] = (samples[i] * gain).clamp(-0.95, 0.95);
       }
     }
   }

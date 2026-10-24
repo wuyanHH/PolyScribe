@@ -38,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<TaskProgressEvent>? _progressSub;
   StreamSubscription<void>? _dbChangeSub;
   TaskProgressEvent? _latestProgress;
+  Timer? _searchDebounceTimer;
 
   @override
   void initState() {
@@ -50,7 +51,9 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _latestProgress = event;
         });
-        if (event.status == TaskStatus.completed || event.status == TaskStatus.error) {
+        if (event.status == TaskStatus.completed ||
+            event.status == TaskStatus.error ||
+            event.status == TaskStatus.paused) {
           _loadAllTasks();
         }
       }
@@ -66,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _progressSub?.cancel();
     _dbChangeSub?.cancel();
     _searchController.dispose();
@@ -90,22 +94,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _onSearchChanged(String val) async {
+  /// 搜索框输入防抖处理 (250ms 防抖收敛高频击键，消除并发 SQL 竞态)
+  void _onSearchChanged(String val) {
+    _searchDebounceTimer?.cancel();
     setState(() {
       _searchQuery = val;
     });
-    if (val.trim().isEmpty) {
+
+    final trimmed = val.trim();
+    if (trimmed.isEmpty) {
       if (mounted) {
         setState(() => _ftsMatchedTaskIds = {});
       }
       return;
     }
-    final hits = await AppDatabase.instance.searchTaskIdsByKeyword(val.trim());
-    if (mounted && _searchQuery == val) {
-      setState(() {
-        _ftsMatchedTaskIds = hits;
-      });
-    }
+
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 250), () async {
+      final hits = await AppDatabase.instance.searchTaskIdsByKeyword(trimmed);
+      if (mounted && _searchQuery.trim() == trimmed) {
+        setState(() {
+          _ftsMatchedTaskIds = hits;
+        });
+      }
+    });
   }
 
   /// 单音频文件选取并直接开启转写
@@ -240,35 +251,40 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 快速重命名任务
   Future<void> _renameTask(MeetingTask task) async {
     final ctrl = TextEditingController(text: task.title);
-    final newTitle = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('重命名会议纪要', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: AppColors.background,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+    String? newTitle;
+    try {
+      newTitle = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('重命名会议纪要', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: AppColors.background,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      ctrl.dispose();
+    }
     if (newTitle != null && newTitle.isNotEmpty && newTitle != task.title) {
       await AppDatabase.instance.updateTaskTitle(task.id, newTitle);
     }
@@ -328,9 +344,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (confirmed == true) {
-      await AppDatabase.instance.deleteTask(task.id, deleteAudioFile: deleteAudio);
+      await TaskQueueService.instance.cancelOrDeleteTask(task.id, deleteAudioFile: deleteAudio);
       if (mounted) {
         AppToast.info(context, '纪要记录已删除');
+        await _loadAllTasks();
       }
     }
   }
@@ -431,16 +448,19 @@ class _HomeScreenState extends State<HomeScreen> {
     final list = _filteredTasks;
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 960;
+    final isCompact = screenWidth < 600;
+    final horizontalPad = isCompact ? 12.0 : 20.0;
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        titleSpacing: isCompact ? 12 : 20,
         title: Row(
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [AppColors.primary, AppColors.primaryDark],
@@ -449,13 +469,17 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: const Text(
                 AppConstants.appShortName,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
               ),
             ),
             const SizedBox(width: 10),
-            const Text(
-              '纪要与转写历史',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+            const Expanded(
+              child: Text(
+                '纪要与转写历史',
+                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: Colors.white),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -475,15 +499,18 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
             onPressed: _loadAllTasks,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 4,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('导入外部音频转写', style: TextStyle(fontWeight: FontWeight.bold)),
+        icon: const Icon(Icons.add_rounded, size: 20),
+        label: Text(
+          isCompact ? '导入音频' : '导入外部音频转写',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+        ),
         onPressed: _showImportOptionsModal,
       ),
       body: _isLoading
@@ -494,14 +521,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     (_latestProgress!.status == TaskStatus.processing ||
                         _latestProgress!.status == TaskStatus.queued))
                   _buildQueueProgressBanner(_latestProgress!),
-                _buildSearchBarAndQuickFilters(),
+                _buildSearchBarAndQuickFilters(isCompact: isCompact, horizontalPad: horizontalPad),
                 Expanded(
                   child: CustomScrollView(
                     physics: const BouncingScrollPhysics(),
                     slivers: [
                       // 顶部生产力 Bento 统计概览
                       SliverToBoxAdapter(
-                        child: _buildBentoStatsHeader(isWide),
+                        child: _buildBentoStatsHeader(isWide, isCompact: isCompact, horizontalPad: horizontalPad),
                       ),
                       if (list.isEmpty)
                         SliverFillRemaining(
@@ -510,7 +537,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         )
                       else if (isWide && _useGridOnWide)
                         SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 96),
+                          padding: EdgeInsets.fromLTRB(horizontalPad, 4, horizontalPad, 96),
                           sliver: SliverGrid(
                             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                               maxCrossAxisExtent: 560,
@@ -522,7 +549,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               (context, index) {
                                 final task = list[index];
                                 final summary = _summaryMap[task.id];
-                                return _buildTaskCard(task, summary, isGridCard: true);
+                                return _buildTaskCard(task, summary, isGridCard: true, isCompact: false);
                               },
                               childCount: list.length,
                             ),
@@ -530,14 +557,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         )
                       else
                         SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 96),
+                          padding: EdgeInsets.fromLTRB(horizontalPad, 4, horizontalPad, 88),
                           sliver: SliverList.separated(
                             itemCount: list.length,
-                            separatorBuilder: (_, _) => const SizedBox(height: 12),
+                            separatorBuilder: (_, _) => SizedBox(height: isCompact ? 10 : 12),
                             itemBuilder: (context, index) {
                               final task = list[index];
                               final summary = _summaryMap[task.id];
-                              return _buildTaskCard(task, summary, isGridCard: false);
+                              return _buildTaskCard(task, summary, isGridCard: false, isCompact: isCompact);
                             },
                           ),
                         ),
@@ -549,15 +576,59 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// 顶部 Bento 生产力概览看板
-  Widget _buildBentoStatsHeader(bool isWide) {
+  /// 顶部 Bento 生产力概览看板 (手机端高密度三联指标条，桌面端完整四卡片)
+  Widget _buildBentoStatsHeader(bool isWide, {required bool isCompact, required double horizontalPad}) {
     final totalTasks = _tasks.length;
     final liveCount = _tasks.where((t) => t.sourceType == TaskSourceType.liveMeeting).length;
     final totalDurationMs = _tasks.fold<int>(0, (acc, t) => acc + t.durationMs);
     final totalWords = _summaryMap.values.fold<int>(0, (acc, s) => acc + s.totalWordCount);
 
+    if (isCompact) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(horizontalPad, 10, horizontalPad, 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildCompactStatItem(
+                  label: '累计纪要',
+                  value: '$totalTasks 篇',
+                  sub: '会议$liveCount·导入${totalTasks - liveCount}',
+                  color: AppColors.primary,
+                ),
+              ),
+              Container(width: 1, height: 32, color: AppColors.cardBorder),
+              Expanded(
+                child: _buildCompactStatItem(
+                  label: '累计时长',
+                  value: _formatOverviewDuration(totalDurationMs),
+                  sub: '16kHz 离线识别',
+                  color: AppColors.emerald,
+                ),
+              ),
+              Container(width: 1, height: 32, color: AppColors.cardBorder),
+              Expanded(
+                child: _buildCompactStatItem(
+                  label: '沉淀字数',
+                  value: _formatNumber(totalWords),
+                  sub: 'FTS5 全文索引',
+                  color: AppColors.cyan,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
+      padding: EdgeInsets.fromLTRB(horizontalPad, 14, horizontalPad, 10),
       child: Column(
         children: [
           Row(
@@ -601,6 +672,44 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 手机端高密度统计单项 (无冗余大图标占位，文字完整清晰)
+  Widget _buildCompactStatItem({
+    required String label,
+    required String value,
+    required String sub,
+    required Color color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 10.5),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(color: color, fontSize: 14.5, fontWeight: FontWeight.bold),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 1),
+          Text(
+            sub,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 9.5),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -729,13 +838,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// 搜索框及分类筛选栏
-  Widget _buildSearchBarAndQuickFilters() {
+  Widget _buildSearchBarAndQuickFilters({required bool isCompact, required double horizontalPad}) {
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
       ),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+      padding: EdgeInsets.fromLTRB(horizontalPad, 6, horizontalPad, 10),
       child: Row(
         children: [
           Expanded(
@@ -743,12 +852,15 @@ class _HomeScreenState extends State<HomeScreen> {
               controller: _searchController,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: '搜索会议标题、发言人或任意段落全文内容 (FTS5)...',
-                hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
-                prefixIcon: const Icon(Icons.search_rounded, color: AppColors.primary, size: 20),
+                hintText: isCompact
+                    ? '搜索标题、发言人或正文内容...'
+                    : '搜索会议标题、发言人或任意段落全文内容 (FTS5)...',
+                hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12.5),
+                prefixIcon: const Icon(Icons.search_rounded, color: AppColors.primary, size: 19),
+                prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 36),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
-                        icon: const Icon(Icons.clear_rounded, size: 18, color: Colors.grey),
+                        icon: const Icon(Icons.clear_rounded, size: 17, color: Colors.grey),
                         tooltip: '清空搜索词',
                         onPressed: () {
                           _searchController.clear();
@@ -759,7 +871,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 filled: true,
                 fillColor: AppColors.background,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: const BorderSide(color: AppColors.cardBorder),
@@ -776,7 +888,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onChanged: _onSearchChanged,
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           _buildFilterButton(),
         ],
       ),
@@ -1132,7 +1244,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildTaskCard(MeetingTask task, TaskSummaryInfo? summary, {required bool isGridCard}) {
+  Widget _buildTaskCard(
+    MeetingTask task,
+    TaskSummaryInfo? summary, {
+    required bool isGridCard,
+    required bool isCompact,
+  }) {
     final isLive = task.sourceType == TaskSourceType.liveMeeting;
     final hasAudio = summary?.isAudioFileExists ?? (task.audioPath.isNotEmpty && File(task.audioPath).existsSync());
     final speakers = summary?.speakers ?? [];
@@ -1153,7 +1270,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _loadAllTasks();
         },
         child: Container(
-          padding: const EdgeInsets.all(14),
+          padding: EdgeInsets.all(isCompact ? 12 : 14),
           decoration: BoxDecoration(
             color: AppColors.surface,
             borderRadius: BorderRadius.circular(14),
@@ -1166,7 +1283,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: EdgeInsets.all(isCompact ? 6 : 7),
                     decoration: BoxDecoration(
                       color: (isLive ? AppColors.primary : AppColors.speakerPalette[2].color)
                           .withValues(alpha: 0.14),
@@ -1175,7 +1292,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Icon(
                       isLive ? Icons.mic_rounded : Icons.audio_file_rounded,
                       color: isLive ? AppColors.primary : AppColors.speakerPalette[2].color,
-                      size: 18,
+                      size: isCompact ? 16 : 18,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1185,10 +1302,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Text(
                           task.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                            fontSize: isCompact ? 14 : 15,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1197,6 +1314,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           '${isLive ? "实时会议" : "外部音频"} · ${_formatCreatedAt(task.createdAt)}',
                           style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
@@ -1204,7 +1323,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   _buildTaskQuickMenu(task, hasAudio),
                 ],
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: isCompact ? 8 : 10),
               // 元数据徽标行
               Wrap(
                 spacing: 6,
@@ -1215,14 +1334,82 @@ class _HomeScreenState extends State<HomeScreen> {
                     task.status.label,
                     color: task.status == TaskStatus.completed
                         ? AppColors.emerald
-                        : (task.status == TaskStatus.error ? AppColors.rose : AppColors.amber),
+                        : (task.status == TaskStatus.error
+                            ? AppColors.rose
+                            : (task.status == TaskStatus.paused
+                                ? Colors.orangeAccent
+                                : AppColors.amber)),
                   ),
-                  _buildTag('时长: ${_formatDuration(task.durationMs)}'),
-                  _buildTag('共 $wordCount 字 ($segCount 段)'),
+                  _buildTag(_formatDuration(task.durationMs)),
+                  _buildTag('$wordCount字 · $segCount段'),
                   if (!hasAudio)
-                    _buildWarningTag('音频已删 (仅纪要)')
-                  else
+                    _buildWarningTag('音频已删')
+                  else if (!isCompact)
                     _buildTag('音频就绪', color: AppColors.emerald),
+                  // 转写中或排队中：显示快速暂停按钮
+                  if ((task.status == TaskStatus.processing || task.status == TaskStatus.queued) && hasAudio)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(4),
+                      onTap: () async {
+                        await TaskQueueService.instance.pauseTask(task.id);
+                        await _loadAllTasks();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.8)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.pause_rounded, size: 12, color: Colors.orangeAccent),
+                            SizedBox(width: 3),
+                            Text(
+                              '暂停',
+                              style: TextStyle(
+                                color: Colors.orangeAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  // 已暂停状态：显示继续转写按钮
+                  if (task.status == TaskStatus.paused && hasAudio)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(4),
+                      onTap: () async {
+                        await TaskQueueService.instance.resumeTask(task.id);
+                        await _loadAllTasks();
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.emerald.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: AppColors.emerald),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.play_arrow_rounded, size: 12, color: AppColors.emerald),
+                            SizedBox(width: 3),
+                            Text(
+                              '继续转写',
+                              style: TextStyle(
+                                color: AppColors.emerald,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   if (task.status == TaskStatus.error && hasAudio)
                     InkWell(
                       borderRadius: BorderRadius.circular(4),
@@ -1261,7 +1448,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (isGridCard) const Spacer() else const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: isCompact ? 6 : 7),
                   decoration: BoxDecoration(
                     color: AppColors.background,
                     borderRadius: BorderRadius.circular(8),
@@ -1294,6 +1481,12 @@ class _HomeScreenState extends State<HomeScreen> {
       onSelected: (action) async {
         if (action == 'rename') {
           await _renameTask(task);
+        } else if (action == 'pause') {
+          await TaskQueueService.instance.pauseTask(task.id);
+          await _loadAllTasks();
+        } else if (action == 'resume') {
+          await TaskQueueService.instance.resumeTask(task.id);
+          await _loadAllTasks();
         } else if (action == 'copy') {
           final segs = await AppDatabase.instance.getSegmentsForTask(task.id);
           final text = segs.map((s) => '[${s.speakerName ?? s.speakerId}] ${s.text}').join('\n');
@@ -1318,6 +1511,28 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+        if (hasAudio && (task.status == TaskStatus.processing || task.status == TaskStatus.queued))
+          const PopupMenuItem(
+            value: 'pause',
+            child: Row(
+              children: [
+                Icon(Icons.pause_circle_outline_rounded, size: 17, color: Colors.orangeAccent),
+                SizedBox(width: 8),
+                Text('暂停转写', style: TextStyle(color: Colors.orangeAccent, fontSize: 13)),
+              ],
+            ),
+          ),
+        if (hasAudio && task.status == TaskStatus.paused)
+          const PopupMenuItem(
+            value: 'resume',
+            child: Row(
+              children: [
+                Icon(Icons.play_circle_outline_rounded, size: 17, color: AppColors.emerald),
+                SizedBox(width: 8),
+                Text('继续转写 (断点恢复)', style: TextStyle(color: AppColors.emerald, fontSize: 13)),
+              ],
+            ),
+          ),
         const PopupMenuItem(
           value: 'copy',
           child: Row(

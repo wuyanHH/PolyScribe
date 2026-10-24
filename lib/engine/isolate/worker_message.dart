@@ -16,17 +16,21 @@ class InitWorkerCommand extends WorkerCommand {
   });
 }
 
-/// 离线文件转写请求
+/// 离线文件转写请求 (支持从指定毫秒断点续转)
 class TranscribeFileCommand extends WorkerCommand {
   final String taskId;
   final String audioFilePath;
   final bool enableDiarization;
+  final int startOffsetMs;
+  final int initialSegmentIndex;
 
   const TranscribeFileCommand({
     required super.messageId,
     required this.taskId,
     required this.audioFilePath,
     this.enableDiarization = true,
+    this.startOffsetMs = 0,
+    this.initialSegmentIndex = 0,
   });
 }
 
@@ -51,6 +55,15 @@ class TranscribeChunkCommand extends WorkerCommand {
 /// 释放或重置工作线程模型
 class DisposeWorkerCommand extends WorkerCommand {
   const DisposeWorkerCommand({required super.messageId});
+}
+
+/// 取消或中断指定转写任务 (用于任务暂停、队列删除与防卡死保护)
+class CancelTaskCommand extends WorkerCommand {
+  final String taskId;
+  const CancelTaskCommand({
+    required super.messageId,
+    required this.taskId,
+  });
 }
 
 /// 工作线程返回的响应基础类

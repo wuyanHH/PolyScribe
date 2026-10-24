@@ -205,6 +205,52 @@ class AppDatabase {
     notifyDatabaseChanged();
   }
 
+  /// 事务内原子性替换指定任务的所有段落 (用于上下文智能优化整合或全文批量清洗)
+  Future<List<TranscriptSegment>> replaceSegmentsForTask(
+    String taskId,
+    List<TranscriptSegment> newSegments,
+  ) async {
+    final db = await database;
+    final List<TranscriptSegment> savedList = [];
+
+    await db.transaction((txn) async {
+      // 1. 清理旧数据与 FTS5 索引
+      try {
+        await txn.delete(
+          'segments_fts',
+          where: 'task_id = ?',
+          whereArgs: [taskId],
+        );
+      } catch (_) {}
+
+      await txn.delete(
+        'segments',
+        where: 'task_id = ?',
+        whereArgs: [taskId],
+      );
+
+      // 2. 批量写入新段落
+      for (final segment in newSegments) {
+        final map = segment.toMap();
+        map.remove('id'); // 重设自增主键
+        final id = await txn.insert('segments', map);
+        try {
+          await txn.insert('segments_fts', {
+            'rowid': id,
+            'text': segment.text,
+            'task_id': taskId,
+            'segment_id': id,
+          });
+        } catch (_) {}
+
+        savedList.add(segment.copyWith(id: id));
+      }
+    });
+
+    notifyDatabaseChanged();
+    return savedList;
+  }
+
   /// 彻底删除任务及其关联的所有段落与全文索引
   Future<void> deleteTask(String taskId, {bool deleteAudioFile = false}) async {
     final db = await database;
@@ -414,36 +460,50 @@ class AppDatabase {
     return results.map((e) => TranscriptSegment.fromMap(e)).toList();
   }
 
-  /// 全文检索关键词
+  /// 全文检索关键词 (优先使用 FTS5 倒排索引毫秒级命中，异常或特殊字符安全降级为参数化 LIKE 模糊搜索)
   Future<List<TranscriptSegment>> searchSegments(String query) async {
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty) return [];
+
     final db = await database;
     try {
-      final ftsResults = await db.rawQuery(
-        'SELECT segment_id FROM segments_fts WHERE text MATCH ? LIMIT 50',
-        ['*$query*'],
-      );
-      if (ftsResults.isEmpty) return [];
+      // 1. 规范化清洗 FTS5 特殊语法控制符 (双引号、星号、括号等)，防注入与语法解析中断
+      final sanitized = cleanQuery.replaceAll(RegExp(r'["\*\(\)\{\}\[\]\:\^\+\-\~]'), ' ').trim();
+      if (sanitized.isNotEmpty) {
+        // 构建标准 FTS5 前缀短语表达式: "keyword"*
+        final ftsExpr = '"$sanitized"*';
+        final ftsResults = await db.rawQuery(
+          'SELECT segment_id FROM segments_fts WHERE text MATCH ? LIMIT 50',
+          [ftsExpr],
+        );
 
-      final ids = ftsResults.map((r) => r['segment_id']).toList();
-      final inClause = List.filled(ids.length, '?').join(',');
-      final segmentResults = await db.query(
-        'segments',
-        where: 'id IN ($inClause)',
-        whereArgs: ids,
-        orderBy: 'start_ms ASC',
-      );
-      return segmentResults.map((e) => TranscriptSegment.fromMap(e)).toList();
-    } catch (_) {
-      // 降级为 LIKE 模糊搜索
-      final likeResults = await db.query(
-        'segments',
-        where: 'text LIKE ?',
-        whereArgs: ['%$query%'],
-        orderBy: 'start_ms ASC',
-        limit: 50,
-      );
-      return likeResults.map((e) => TranscriptSegment.fromMap(e)).toList();
+        if (ftsResults.isNotEmpty) {
+          final ids = ftsResults.map((r) => r['segment_id']).toList();
+          final inClause = List.filled(ids.length, '?').join(',');
+          final segmentResults = await db.query(
+            'segments',
+            where: 'id IN ($inClause)',
+            whereArgs: ids,
+            orderBy: 'start_ms ASC',
+          );
+          if (segmentResults.isNotEmpty) {
+            return segmentResults.map((e) => TranscriptSegment.fromMap(e)).toList();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[AppDatabase] FTS5 检索降级至 LIKE: $e');
     }
+
+    // 2. 降级安全保障：使用标准参数化 LIKE 模糊搜索 (对中文任意子串匹配最友好)
+    final likeResults = await db.query(
+      'segments',
+      where: 'text LIKE ?',
+      whereArgs: ['%$cleanQuery%'],
+      orderBy: 'start_ms ASC',
+      limit: 50,
+    );
+    return likeResults.map((e) => TranscriptSegment.fromMap(e)).toList();
   }
 
   /// 保存声纹

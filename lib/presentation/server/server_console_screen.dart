@@ -116,7 +116,7 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
 
   Widget _buildServiceStatusCard(bool isRunning, String baseUrl) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -128,33 +128,32 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: isRunning ? AppColors.emerald : AppColors.textMuted,
-                      shape: BoxShape.circle,
-                      boxShadow: isRunning
-                          ? [
-                              BoxShadow(
-                                color: AppColors.emerald.withValues(alpha: 0.6),
-                                blurRadius: 8,
-                                spreadRadius: 1,
-                              ),
-                            ]
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    isRunning ? '服务监听中 (运行中)' : '服务已暂停 (待机)',
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16),
-                  ),
-                ],
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: isRunning ? AppColors.emerald : AppColors.textMuted,
+                  shape: BoxShape.circle,
+                  boxShadow: isRunning
+                      ? [
+                          BoxShadow(
+                            color: AppColors.emerald.withValues(alpha: 0.6),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          ),
+                        ]
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  isRunning ? '服务监听中 (运行中)' : '服务已暂停 (待机)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 15.5),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               Switch(
                 value: isRunning,
@@ -172,7 +171,9 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
           Row(
             children: [
               _buildStatItem('局域网监听地址', '$_localIp:${AppConstants.defaultServerPort}'),
+              const SizedBox(width: 8),
               _buildStatItem('累计请求次数', '${InferenceLockManager.instance.totalRequests} 次'),
+              const SizedBox(width: 8),
               _buildStatItem('服务状态码', isRunning ? '200 OK' : 'STOPPED'),
             ],
           ),
@@ -186,7 +187,12 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5)),
+          Text(
+            label,
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           const SizedBox(height: 4),
           Text(
             value,
@@ -194,8 +200,10 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
               fontFamily: 'monospace',
               color: Colors.white,
               fontWeight: FontWeight.bold,
-              fontSize: 13.5,
+              fontSize: 12.5,
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -207,7 +215,7 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
         'curl -X POST $baseUrl/audio/transcriptions -F "file=@sample.wav" -F "model=whisper-1"';
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -220,9 +228,13 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
             children: [
               Icon(Icons.api_rounded, size: 18, color: AppColors.cyan),
               SizedBox(width: 8),
-              Text(
-                '第三方生态接入参数 (OpenAI Whisper API 兼容)',
-                style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14.5),
+              Expanded(
+                child: Text(
+                  '第三方生态接入参数 (OpenAI Whisper 兼容)',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -238,13 +250,14 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
           const SizedBox(height: 8),
           _buildCopyRow('Model Name', 'whisper-1 / sensevoice-small'),
           const SizedBox(height: 8),
-          _buildCopyRow('cURL 调试示例', curlExample),
+          _buildCopyRow('cURL 示例', curlExample),
         ],
       ),
     );
   }
 
   Widget _buildCopyRow(String label, String value) {
+    final isCompact = MediaQuery.of(context).size.width < 600;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -255,13 +268,18 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
       child: Row(
         children: [
           SizedBox(
-            width: 105,
-            child: Text(label, style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
+            width: isCompact ? 86 : 105,
+            child: Text(
+              label,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
+              style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 11.5),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -277,17 +295,16 @@ class _ServerConsoleScreenState extends State<ServerConsoleScreen> {
 
   Widget _buildLogsHeader() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        const Row(
-          children: [
-            Icon(Icons.terminal_rounded, size: 18, color: AppColors.primary),
-            SizedBox(width: 6),
-            Text(
-              '实时调用监控与排队审计日志',
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 15),
-            ),
-          ],
+        const Icon(Icons.terminal_rounded, size: 18, color: AppColors.primary),
+        const SizedBox(width: 6),
+        const Expanded(
+          child: Text(
+            '实时调用监控与排队审计日志',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14.5),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         if (_logs.isNotEmpty)
           TextButton(

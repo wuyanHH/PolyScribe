@@ -19,6 +19,7 @@ enum TaskStatus {
   recording('recording'),
   queued('queued'),
   processing('processing'),
+  paused('paused'),
   completed('completed'),
   error('error');
 
@@ -33,6 +34,8 @@ enum TaskStatus {
         return '排队中';
       case TaskStatus.processing:
         return '转写中';
+      case TaskStatus.paused:
+        return '已暂停';
       case TaskStatus.completed:
         return '已完成';
       case TaskStatus.error:

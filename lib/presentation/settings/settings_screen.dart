@@ -34,6 +34,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   double _vadSilenceThreshold = 0.8;
   bool _enableDriftSuppression = true;
   String _preferredLanguage = 'auto';
+  bool _autoResumeTranscription = true;
   String _dbSizeText = '计算中...';
   String _dbDirPath = '';
   bool _isVacuuming = false;
@@ -58,10 +59,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           : '${(bytes / 1024).toStringAsFixed(1)} KB';
     }
 
+    final savedLang = await AppDatabase.instance.getSetting('preferred_language') ?? 'zh';
+    final autoResumeVal = await AppDatabase.instance.getSetting('auto_resume_transcription');
+    final autoResume = autoResumeVal == null ? true : (autoResumeVal == 'true');
+
     if (mounted) {
       setState(() {
         _modelConfig = config;
         _dbSizeText = sizeStr;
+        _preferredLanguage = savedLang;
+        _autoResumeTranscription = autoResume;
       });
     }
   }
@@ -102,12 +109,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final allModelsReady = isVadReady && isAsrReady;
     final isServerRunning = widget.localHttpServer?.isRunning ?? false;
     final currentTheme = ref.watch(themeModeProvider);
+    final isCompact = MediaQuery.of(context).size.width < 600;
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        titleSpacing: isCompact ? 12 : 20,
         title: Row(
           children: [
             Container(
@@ -116,21 +125,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 color: AppColors.primary.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.settings_suggest_rounded, color: AppColors.primary, size: 20),
+              child: const Icon(Icons.settings_suggest_rounded, color: AppColors.primary, size: 19),
             ),
-            const SizedBox(width: 12),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '系统与中枢设置',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-                Text(
-                  '视觉外观 · AI 引擎 · 采样调优 · 局域网服务 · 存储管理',
-                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
-                ),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '系统与中枢设置',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (!isCompact)
+                    const Text(
+                      '视觉外观 · AI 引擎 · 采样调优 · 局域网服务 · 存储管理',
+                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -139,7 +155,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 860),
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            padding: EdgeInsets.symmetric(horizontal: isCompact ? 14 : 20, vertical: isCompact ? 16 : 24),
             physics: const BouncingScrollPhysics(),
             children: [
               // 1. 视觉外观与主题风格 (深浅色高质感 Tab)
@@ -150,19 +166,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 iconColor: const Color(0xFF8B5CF6),
               ),
               const SizedBox(height: 10),
-              _buildThemeSelectorCard(currentTheme),
-              const SizedBox(height: 28),
+              _buildThemeSelectorCard(currentTheme, isCompact: isCompact),
+              SizedBox(height: isCompact ? 20 : 28),
 
               // 2. AI 离线模型中枢
               _buildSectionTitle(
                 title: 'AI 离线模型中枢',
-                subtitle: '本地神经网路推理资产管理与自检',
+                subtitle: '本地神经网络推理资产管理与自检',
                 icon: Icons.memory_rounded,
                 iconColor: AppColors.primary,
               ),
               const SizedBox(height: 10),
-              _buildModelCenterCard(allModelsReady),
-              const SizedBox(height: 28),
+              _buildModelCenterCard(allModelsReady, isCompact: isCompact),
+              SizedBox(height: isCompact ? 20 : 28),
 
               // 3. 音频采样与识别调优
               _buildSectionTitle(
@@ -172,8 +188,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 iconColor: AppColors.amber,
               ),
               const SizedBox(height: 10),
-              _buildAudioTuningCard(),
-              const SizedBox(height: 28),
+              _buildAudioTuningCard(isCompact: isCompact),
+              SizedBox(height: isCompact ? 20 : 28),
 
               // 4. 本地 STT API 服务中枢
               _buildSectionTitle(
@@ -184,7 +200,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               const SizedBox(height: 10),
               _buildServerHubCard(isServerRunning),
-              const SizedBox(height: 28),
+              SizedBox(height: isCompact ? 20 : 28),
 
               // 5. 数据存储与维护
               _buildSectionTitle(
@@ -195,12 +211,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               const SizedBox(height: 10),
               _buildStorageMaintenanceCard(),
-              const SizedBox(height: 28),
+              SizedBox(height: isCompact ? 20 : 28),
 
               // 6. 系统保活与关于 PolyScribe
               _buildSectionTitle(
                 title: '系统保活与软件关于',
-                subtitle: '桌面端休眠防中断与客户端版本信息',
+                subtitle: '后台休眠防中断与客户端版本信息',
                 icon: Icons.shield_rounded,
                 iconColor: const Color(0xFFA855F7),
               ),
@@ -215,7 +231,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// 0. 视觉外观与主题风格选择卡片 (高级深浅色 Segmented Tab 布局)
-  Widget _buildThemeSelectorCard(ThemeMode currentTheme) {
+  Widget _buildThemeSelectorCard(ThemeMode currentTheme, {required bool isCompact}) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -229,27 +245,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ],
       ),
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(isCompact ? 16 : 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '主题外观模式',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                  SizedBox(height: 3),
-                  Text(
-                    '支持深色沉浸、清爽明亮与自动跟随系统无缝切换',
-                    style: TextStyle(fontSize: 12, color: AppColors.textMuted),
-                  ),
-                ],
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '主题外观模式',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    SizedBox(height: 3),
+                    Text(
+                      '支持深色沉浸、清爽明亮与自动跟随系统无缝切换',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
@@ -287,7 +305,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
 
           // 核心：三联高质感深浅色 Tab 选项卡
           LayoutBuilder(
@@ -317,7 +335,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _ThemeTabItem(
                   mode: ThemeMode.system,
                   title: '跟随系统',
-                  subtitle: '感应 Windows 外观模式自动匹配',
+                  subtitle: '感应系统外观模式自动匹配',
                   icon: Icons.brightness_auto_rounded,
                   accentColor: AppColors.emerald,
                   previewBg: const Color(0xFF1A1F2C),
@@ -580,23 +598,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Icon(icon, size: 16, color: iconColor),
           ),
           const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 0.3,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 0.3,
+                  ),
                 ),
-              ),
-              Text(
-                subtitle,
-                style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
-              ),
-            ],
+                Text(
+                  subtitle,
+                  style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -604,7 +626,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// 1. AI 模型卡片
-  Widget _buildModelCenterCard(bool allReady) {
+  Widget _buildModelCenterCard(bool allReady, {required bool isCompact}) {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -629,13 +651,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _loadSettingsData();
           },
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: EdgeInsets.all(isCompact ? 14 : 18),
             child: Row(
               children: [
                 // 状态指示图标
                 Container(
-                  width: 44,
-                  height: 44,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
                     color: allReady
                         ? AppColors.emerald.withValues(alpha: 0.15)
@@ -649,15 +671,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   child: Icon(
                     allReady ? Icons.check_circle_rounded : Icons.cloud_download_rounded,
                     color: allReady ? AppColors.emerald : AppColors.amber,
-                    size: 22,
+                    size: 20,
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           const Text(
                             '离线 AI 语音模型包管理',
@@ -667,7 +692,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               color: Colors.white,
                             ),
                           ),
-                          const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
@@ -697,23 +721,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceElevated,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.cardBorder),
+                const SizedBox(width: 10),
+                if (isCompact)
+                  const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textMuted)
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceElevated,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppColors.cardBorder),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('模型管理', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                        SizedBox(width: 4),
+                        Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppColors.textMuted),
+                      ],
+                    ),
                   ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('模型管理', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                      SizedBox(width: 4),
-                      Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppColors.textMuted),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -806,11 +833,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 children: [
                   Icon(Icons.terminal_rounded, size: 18, color: AppColors.cyan),
                   SizedBox(width: 10),
-                  Text(
-                    '进入服务控制台、查看调用日志与接口测试',
-                    style: TextStyle(fontSize: 13, color: AppColors.textPrimary, fontWeight: FontWeight.w500),
+                  Expanded(
+                    child: Text(
+                      '进入服务控制台、查看调用日志与接口测试',
+                      style: TextStyle(fontSize: 13, color: AppColors.textPrimary, fontWeight: FontWeight.w500),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  Spacer(),
                   Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.textMuted),
                 ],
               ),
@@ -822,9 +852,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// 3. 音频采样与识别调优卡片
-  Widget _buildAudioTuningCard() {
+  Widget _buildAudioTuningCard({required bool isCompact}) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(isCompact ? 14 : 18),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -852,6 +882,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
@@ -939,6 +970,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Divider(height: 1, color: AppColors.cardBorder),
           ),
 
+          // 启动软件自动继续转写
+          Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '进入软件自动继续转写',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '冷启动或重新打开软件时，自动恢复未完成与已暂停任务的后台断点转写（默认开启）',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _autoResumeTranscription,
+                activeThumbColor: AppColors.primary,
+                onChanged: (val) async {
+                  setState(() => _autoResumeTranscription = val);
+                  await AppDatabase.instance.saveSetting('auto_resume_transcription', val ? 'true' : 'false');
+                  if (mounted) {
+                    AppToast.info(context, val ? '已开启自动继续转写' : '已关闭自动继续转写');
+                  }
+                },
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Divider(height: 1, color: AppColors.cardBorder),
+          ),
+
           // 识别语种偏好
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -955,11 +1023,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  _buildLanguageChip('auto', '自动识别 (中/粤/英/日/韩)', Icons.auto_awesome_rounded),
-                  const SizedBox(width: 10),
-                  _buildLanguageChip('zh', '强制简体中文', Icons.translate_rounded),
-                  const SizedBox(width: 10),
-                  _buildLanguageChip('en', '强制英文', Icons.language_rounded),
+                  _buildLanguageChip(
+                    'auto',
+                    isCompact ? '自动识别' : '自动识别 (中/粤/英/日/韩)',
+                    Icons.auto_awesome_rounded,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildLanguageChip(
+                    'zh',
+                    isCompact ? '简体中文' : '强制简体中文',
+                    Icons.translate_rounded,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildLanguageChip(
+                    'en',
+                    isCompact ? '强制英文' : '强制英文',
+                    Icons.language_rounded,
+                  ),
                 ],
               ),
             ],
@@ -977,10 +1057,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         borderRadius: BorderRadius.circular(10),
         onTap: () {
           setState(() => _preferredLanguage = key);
+          AppDatabase.instance.saveSetting('preferred_language', key);
+          AppToast.info(context, '首选语言已更新为：$label');
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           decoration: BoxDecoration(
             color: isSelected ? AppColors.primary.withValues(alpha: 0.15) : AppColors.surfaceElevated,
             borderRadius: BorderRadius.circular(10),
@@ -996,8 +1078,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Text(
                 label,
                 textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 11.5,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   color: isSelected ? Colors.white : AppColors.textSecondary,
                 ),
@@ -1012,7 +1096,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// 4. 存储与维护卡片
   Widget _buildStorageMaintenanceCard() {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -1030,7 +1114,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 child: const Icon(Icons.dns_rounded, color: AppColors.emerald, size: 20),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1041,12 +1125,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '包含任务历史、发言人声纹库与 FTS5 全文索引: $_dbSizeText',
+                      '包含任务历史、声纹库与 FTS5 索引: $_dbSizeText',
                       style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.surfaceElevated,
@@ -1054,7 +1139,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   elevation: 0,
                   side: const BorderSide(color: AppColors.cardBorder),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                 ),
                 icon: _isVacuuming
                     ? const SizedBox(
@@ -1062,7 +1147,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
                       )
-                    : const Icon(Icons.cleaning_services_rounded, size: 16, color: AppColors.emerald),
+                    : const Icon(Icons.cleaning_services_rounded, size: 15, color: AppColors.emerald),
                 label: Text(
                   _isVacuuming ? '紧缩中...' : '紧缩优化',
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
@@ -1085,10 +1170,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              TextButton(
-                onPressed: _openDataDirectory,
-                child: const Text('打开目录', style: TextStyle(fontSize: 12, color: AppColors.primary)),
-              ),
+              if (Platform.isWindows)
+                TextButton(
+                  onPressed: _openDataDirectory,
+                  child: const Text('打开目录', style: TextStyle(fontSize: 12, color: AppColors.primary)),
+                ),
             ],
           ),
         ],
@@ -1099,7 +1185,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// 5. 关于与保活卡片
   Widget _buildAboutAndKeepAliveCard() {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -1135,7 +1221,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                         SizedBox(height: 2),
                         Text(
-                          '申请硬件锁与前台服务，防止长达数小时的长会议转录时电脑休眠中断',
+                          '申请硬件唤醒锁与后台无限制权限，防止长会议转录被系统休眠中断',
                           style: TextStyle(fontSize: 12, color: AppColors.textMuted),
                         ),
                       ],

@@ -130,6 +130,45 @@ class SyncPlayController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 纯内存无感更新指定角色的显示姓名 (绝不重置音频源与播放器，零延迟即时响应)
+  void updateSpeakerName(String speakerId, String newSpeakerName) {
+    bool hasChanged = false;
+    for (int i = 0; i < _segments.length; i++) {
+      if (_segments[i].speakerId == speakerId) {
+        _segments[i] = _segments[i].copyWith(speakerName: newSpeakerName);
+        hasChanged = true;
+      }
+    }
+    if (hasChanged) {
+      notifyListeners();
+    }
+  }
+
+  /// 纯内存更新段落列表 (用于上下文整合优化或校对，保留当前音频播放状态与位置)
+  void updateSegments(List<TranscriptSegment> newSegments) {
+    _segments.clear();
+    _segments.addAll(newSegments);
+    _segments.sort((a, b) => a.startMs.compareTo(b.startMs));
+
+    final totalDuration = _segments.isNotEmpty ? _segments.last.endMs : 0;
+    final activeIndex = BinarySearchUtil.findActiveIndex(_segments, _state.positionMs);
+
+    _state = _state.copyWith(
+      durationMs: totalDuration > _state.durationMs ? totalDuration : _state.durationMs,
+      activeSegmentIndex: activeIndex,
+    );
+    notifyListeners();
+  }
+
+  /// 纯内存更新单条段落文本
+  void updateSegmentText(int segmentId, String newText) {
+    final idx = _segments.indexWhere((s) => s.id == segmentId);
+    if (idx >= 0) {
+      _segments[idx] = _segments[idx].copyWith(text: newText);
+      notifyListeners();
+    }
+  }
+
   /// 播放/暂停切换
   Future<void> togglePlay() async {
     if (!_isAudioAvailable) return;

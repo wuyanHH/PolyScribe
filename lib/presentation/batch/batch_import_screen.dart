@@ -34,7 +34,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
         setState(() {
           _progressMap[event.taskId] = event;
         });
-        if (event.status == TaskStatus.completed || event.status == TaskStatus.error) {
+        if (event.status == TaskStatus.completed ||
+            event.status == TaskStatus.error ||
+            event.status == TaskStatus.paused) {
           _scheduleReloadTasks();
         }
       }
@@ -131,11 +133,102 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
   Future<void> _retryAllFailed() async {
     final failed = _tasks.where((t) => t.status == TaskStatus.error).toList();
     for (final t in failed) {
-      await TaskQueueService.instance.retryTask(t.id);
+      // 优先从断点续转，若无断点则从头识别
+      await TaskQueueService.instance.resumeTask(t.id);
     }
     _loadTasks();
     if (mounted && failed.isNotEmpty) {
-      AppToast.info(context, '已重新将 ${failed.length} 个失败任务加入队列');
+      AppToast.info(context, '已重新将 ${failed.length} 个任务加入队列恢复转写');
+    }
+  }
+
+  /// 智能恢复或重新转写确认对话框 (支持秒级断点续转)
+  Future<void> _handleRetryOrResumeTask(MeetingTask task) async {
+    final segs = await AppDatabase.instance.getSegmentsForTask(task.id);
+
+    if (segs.isEmpty) {
+      await _confirmRetryTask(task);
+      return;
+    }
+
+    if (!mounted) return;
+    final int maxMs = segs.map((s) => s.endMs).fold(0, (max, v) => v > max ? v : max);
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.history_toggle_off_rounded, color: AppColors.primary, size: 22),
+            SizedBox(width: 8),
+            Text('转写恢复选项', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('录音「${task.title}」已保留部分转录记录：', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+              ),
+              child: Text(
+                '已保存 ${segs.length} 个自然句发言段落 · 已转录至 ${_formatDuration(maxMs)}',
+                style: const TextStyle(color: AppColors.primary, fontSize: 12.5, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              '您可以选择从断点位置秒级继续，无需从头重新消耗算力；也可以选择清空并全量重转。',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'cancel'),
+            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+          ),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.rose,
+              side: BorderSide(color: AppColors.rose.withValues(alpha: 0.5)),
+            ),
+            onPressed: () => Navigator.pop(ctx, 'retry'),
+            child: const Text('清空重新识别'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+            label: const Text('从断点继续', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx, 'resume'),
+          ),
+        ],
+      ),
+    );
+
+    if (action == 'resume') {
+      await TaskQueueService.instance.resumeTask(task.id);
+      _loadTasks();
+      if (mounted) {
+        AppToast.success(context, '已启动断点续转，从 ${_formatDuration(maxMs)} 处继续');
+      }
+    } else if (action == 'retry') {
+      await TaskQueueService.instance.retryTask(task.id);
+      _loadTasks();
+      if (mounted) {
+        AppToast.info(context, '已清空旧段落，重新加入转写队列');
+      }
     }
   }
 
@@ -192,7 +285,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
   }
 
   Future<void> _deleteTask(MeetingTask task) async {
-    await AppDatabase.instance.deleteTask(task.id);
+    await TaskQueueService.instance.cancelOrDeleteTask(task.id);
     _loadTasks();
     if (mounted) {
       AppToast.info(context, '已移除任务「${task.title}」');
@@ -204,12 +297,15 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     final completedCount = _tasks.where((t) => t.status == TaskStatus.completed).length;
     final failedCount = _tasks.where((t) => t.status == TaskStatus.error).length;
     final activeCount = _tasks.length - completedCount - failedCount;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isCompact = screenWidth < 640;
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        titleSpacing: isCompact ? 12 : 20,
         title: Row(
           children: [
             Container(
@@ -218,30 +314,43 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 color: AppColors.cyan.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.queue_music_rounded, color: AppColors.cyan, size: 20),
+              child: const Icon(Icons.queue_music_rounded, color: AppColors.cyan, size: 19),
             ),
-            const SizedBox(width: 12),
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '外部音频转写中心',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                ),
-                Text(
-                  '全格式硬件解码 · 双声道物理分离 · 串行防 OOM 队列',
-                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
-                ),
-              ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '外部音频转写中心',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (!isCompact)
+                    const Text(
+                      '全格式硬件解码 · 双声道物理分离 · 串行防 OOM 队列',
+                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
         actions: [
           if (failedCount > 0)
             TextButton.icon(
-              style: TextButton.styleFrom(foregroundColor: AppColors.primary),
-              icon: const Icon(Icons.refresh_rounded, size: 17),
-              label: Text('全部重试 ($failedCount)', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: Text(
+                isCompact ? '重试($failedCount)' : '全部重试 ($failedCount)',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
               onPressed: _retryAllFailed,
             ),
           IconButton(
@@ -249,7 +358,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
             icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
             onPressed: _loadTasks,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
         ],
       ),
       body: _isLoading
@@ -258,38 +367,37 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 960),
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(isCompact ? 12 : 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildActionDropCards(),
-                      const SizedBox(height: 20),
-                      Row(
+                      _buildActionDropCards(isCompact: isCompact),
+                      SizedBox(height: isCompact ? 14 : 20),
+                      // 队列标题与统计胶囊自适应换行，彻底杜绝手机端横向溢出
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          const Text(
-                            '音频转写队列与历史记录',
-                            style: TextStyle(
-                              fontSize: 15,
+                          Text(
+                            isCompact ? '转写队列与记录' : '音频转写队列与历史记录',
+                            style: const TextStyle(
+                              fontSize: 14.5,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          _buildMiniCounterBadge('处理/排队 $activeCount', AppColors.primary),
-                          const SizedBox(width: 6),
+                          _buildMiniCounterBadge('排队/处理 $activeCount', AppColors.primary),
                           _buildMiniCounterBadge('已完成 $completedCount', AppColors.emerald),
-                          if (failedCount > 0) ...[
-                            const SizedBox(width: 6),
+                          if (failedCount > 0)
                             _buildMiniCounterBadge('失败 $failedCount', AppColors.rose),
-                          ],
-                          const Spacer(),
                           Text(
-                            '共 ${_tasks.length} 个任务',
-                            style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                            '共 ${_tasks.length} 项',
+                            style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       Expanded(
                         child: _tasks.isEmpty
                             ? _buildEmptyQueueView()
@@ -301,7 +409,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                                   final task = _tasks[index];
                                   final progress = _progressMap[task.id];
                                   final summary = _summaryMap[task.id];
-                                  return _buildTaskCard(task, progress, summary);
+                                  return _buildTaskCard(task, progress, summary, isCompact: isCompact);
                                 },
                               ),
                       ),
@@ -363,7 +471,116 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     );
   }
 
-  Widget _buildActionDropCards() {
+  Widget _buildActionDropCards({required bool isCompact}) {
+    if (isCompact) {
+      return Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: _pickSingleAudioFile,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primary.withValues(alpha: 0.2),
+                      AppColors.surface,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '单音频转写',
+                            style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'WAV/MP3/M4A等',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 10.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: _pickMultipleAudioFiles,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: AppColors.cyan.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.library_music_rounded, color: AppColors.cyan, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '批量队列导入',
+                            style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            '串行排队防闪退',
+                            style: TextStyle(color: AppColors.textMuted, fontSize: 10.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Row(
       children: [
         Expanded(
@@ -481,151 +698,226 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     return '$minutes分${seconds.toString().padLeft(2, '0')}秒';
   }
 
-  Widget _buildTaskCard(MeetingTask task, TaskProgressEvent? progress, TaskSummaryInfo? summary) {
+  Widget _buildTaskCard(
+    MeetingTask task,
+    TaskProgressEvent? progress,
+    TaskSummaryInfo? summary, {
+    required bool isCompact,
+  }) {
     final isDone = task.status == TaskStatus.completed;
     final isError = task.status == TaskStatus.error;
+    final isPaused = task.status == TaskStatus.paused;
+    final isProcessingOrQueued = task.status == TaskStatus.processing || task.status == TaskStatus.queued;
     final words = summary?.totalWordCount ?? 0;
     final segs = summary?.segmentCount ?? 0;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isDone
-              ? AppColors.emerald.withValues(alpha: 0.35)
-              : (isError ? AppColors.rose.withValues(alpha: 0.45) : AppColors.cardBorder),
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: isDone
+          ? () {
+              Navigator.of(context)
+                  .push(
+                    MaterialPageRoute(
+                      builder: (_) => SyncPlayerScreen(task: task),
+                    ),
+                  )
+                  .then((_) => _loadTasks());
+            }
+          : null,
+      child: Container(
+        padding: EdgeInsets.all(isCompact ? 12 : 16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isDone
+                ? AppColors.emerald.withValues(alpha: 0.35)
+                : (isError
+                    ? AppColors.rose.withValues(alpha: 0.45)
+                    : (isPaused ? Colors.orangeAccent.withValues(alpha: 0.45) : AppColors.cardBorder)),
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: (isDone ? AppColors.emerald : (isError ? AppColors.rose : AppColors.primary))
-                      .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(isCompact ? 7 : 8),
+                  decoration: BoxDecoration(
+                    color: (isDone
+                            ? AppColors.emerald
+                            : (isError
+                                ? AppColors.rose
+                                : (isPaused ? Colors.orangeAccent : AppColors.primary)))
+                        .withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    isDone
+                        ? Icons.check_circle_rounded
+                        : (isError
+                            ? Icons.error_outline_rounded
+                            : (isPaused ? Icons.pause_circle_rounded : Icons.sync_rounded)),
+                    color: isDone
+                        ? AppColors.emerald
+                        : (isError
+                            ? AppColors.rose
+                            : (isPaused ? Colors.orangeAccent : AppColors.primary)),
+                    size: isCompact ? 18 : 20,
+                  ),
                 ),
-                child: Icon(
-                  isDone
-                      ? Icons.check_circle_rounded
-                      : (isError ? Icons.error_outline_rounded : Icons.sync_rounded),
-                  color: isDone ? AppColors.emerald : (isError ? AppColors.rose : AppColors.primary),
-                  size: 20,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: isCompact ? 13.5 : 14.5,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        isDone
+                            ? '${_formatDuration(task.durationMs)} · $words字 ($segs段)'
+                            : (isError
+                                ? '转写异常，可点击右侧重试'
+                                : (isPaused
+                                    ? '已暂停转写 (已存 $segs 段)，点击继续可恢复'
+                                    : (task.status == TaskStatus.queued
+                                        ? '正在等待前置任务完成并自动调度...'
+                                        : '正在解码与转写中...'))),
+                        style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                if (isDone) ...[
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: '重新转写此纪要',
+                    icon: const Icon(Icons.refresh_rounded, size: 18, color: AppColors.textSecondary),
+                    onPressed: () => _confirmRetryTask(task),
+                  ),
+                  if (!isCompact) ...[
+                    const SizedBox(width: 4),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary.withValues(alpha: 0.16),
+                        foregroundColor: AppColors.primary,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.play_circle_outline_rounded, size: 16),
+                      label: const Text('查看纪要', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: () {
+                        Navigator.of(context)
+                            .push(
+                              MaterialPageRoute(
+                                builder: (_) => SyncPlayerScreen(task: task),
+                              ),
+                            )
+                            .then((_) => _loadTasks());
+                      },
+                    ),
+                  ],
+                ] else if (isProcessingOrQueued) ...[
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.orangeAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(Icons.pause_circle_outline_rounded, size: 15),
+                    label: const Text('暂停', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    onPressed: () async {
+                      await TaskQueueService.instance.pauseTask(task.id);
+                      _loadTasks();
+                    },
+                  ),
+                ] else if (isPaused) ...[
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.emerald,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 15),
+                    label: const Text('继续', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    onPressed: () async {
+                      await TaskQueueService.instance.resumeTask(task.id);
+                      _loadTasks();
+                    },
+                  ),
+                ] else if (isError)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: Icon(segs > 0 ? Icons.history_toggle_off_rounded : Icons.refresh_rounded, size: 15),
+                    label: Text(segs > 0 ? '续转/重试' : '重试', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    onPressed: () => _handleRetryOrResumeTask(task),
+                  ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: '移除任务',
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.textMuted),
+                  onPressed: () => _deleteTask(task),
+                ),
+              ],
+            ),
+            if (progress != null && !isDone) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress.progress,
+                  backgroundColor: AppColors.background,
+                  valueColor: AlwaysStoppedAnimation(
+                    isError ? AppColors.rose : AppColors.primary,
+                  ),
+                  minHeight: 5,
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      task.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14.5,
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      progress.stageDescription,
+                      style: TextStyle(
+                        color: isError ? AppColors.rose : AppColors.textSecondary,
+                        fontSize: 11.5,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      isDone
-                          ? '时长: ${_formatDuration(task.durationMs)} · 共 $words 字 ($segs 段)'
-                          : '音频路径: ${task.audioPath}',
-                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              if (isDone) ...[
-                IconButton(
-                  tooltip: '重新转写此纪要',
-                  icon: const Icon(Icons.refresh_rounded, size: 18, color: AppColors.textSecondary),
-                  onPressed: () => _confirmRetryTask(task),
-                ),
-                const SizedBox(width: 4),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary.withValues(alpha: 0.16),
-                    foregroundColor: AppColors.primary,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
-                  icon: const Icon(Icons.play_circle_outline_rounded, size: 16),
-                  label: const Text('查看纪要', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  onPressed: () {
-                    Navigator.of(context)
-                        .push(
-                          MaterialPageRoute(
-                            builder: (_) => SyncPlayerScreen(task: task),
-                          ),
-                        )
-                        .then((_) => _loadTasks());
-                  },
-                ),
-              ] else if (isError)
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${(progress.progress * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(color: AppColors.primary, fontSize: 11.5, fontWeight: FontWeight.bold),
                   ),
-                  icon: const Icon(Icons.refresh_rounded, size: 16),
-                  label: const Text('重新转写', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  onPressed: () => _confirmRetryTask(task),
-                ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: '移除任务',
-                icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.textMuted),
-                onPressed: () => _deleteTask(task),
+                ],
               ),
             ],
-          ),
-          if (progress != null && !isDone) ...[
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: progress.progress,
-                backgroundColor: AppColors.background,
-                valueColor: AlwaysStoppedAnimation(
-                  isError ? AppColors.rose : AppColors.primary,
-                ),
-                minHeight: 5,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    progress.stageDescription,
-                    style: TextStyle(
-                      color: isError ? AppColors.rose : AppColors.textSecondary,
-                      fontSize: 11.5,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Text(
-                  '${(progress.progress * 100).toInt()}%',
-                  style: const TextStyle(color: AppColors.primary, fontSize: 11.5, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
           ],
-        ],
+        ),
       ),
     );
   }

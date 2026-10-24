@@ -4,9 +4,11 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/app_toast.dart';
 import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../data/models/transcript_segment.dart';
+import '../../engine/audio/native_audio_bridge.dart';
 import '../../engine/audio/windows_wasapi_recorder.dart';
 import '../../engine/isolate/inference_worker.dart';
 import '../../engine/isolate/worker_message.dart';
@@ -68,6 +70,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     _pulseScaleAnim = Tween<double>(begin: 0.85, end: 1.15).animate(
       CurvedAnimation(parent: _pulseAnimController, curve: Curves.easeInOut),
     );
+
+    if (!NativeAudioBridge.isWindowsNativeSupported) {
+      _selectedSourceMode = AudioSourceMode.microphone;
+    }
 
     _titleController.text = '实时会议纪要 ${_formatCurrentDate()}';
     _scrollController.addListener(_onScroll);
@@ -389,6 +395,14 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     final recorder = WindowsWasapiRecorder.instance;
     recorder.setMode(_selectedSourceMode);
     _recordedAudioPath = await recorder.startRecording(taskId: _taskId);
+    if (_recordedAudioPath == null || _recordedAudioPath!.isEmpty) {
+      await KeepAliveService.instance.releaseWakeLock();
+      await KeepAliveService.instance.stopForegroundService();
+      if (mounted) {
+        AppToast.error(context, '未能获取麦克风录音权限，请在系统设置中授权麦克风后重试');
+      }
+      return;
+    }
 
     setState(() {
       _recorderState = MeetingRecorderState.recording;
@@ -527,34 +541,39 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
   /// 快速修改发言人姓名
   Future<void> _editSpeakerName(String speakerId, String currentName) async {
     final editController = TextEditingController(text: currentName);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('修改发言人备注 ($speakerId)', style: const TextStyle(color: Colors.white, fontSize: 16)),
-        content: TextField(
-          controller: editController,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: '输入该角色在此次会议中的姓名...',
-            hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-            filled: true,
-            fillColor: AppColors.background,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+    String? newName;
+    try {
+      newName = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('修改发言人备注 ($speakerId)', style: const TextStyle(color: Colors.white, fontSize: 16)),
+          content: TextField(
+            controller: editController,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: '输入该角色在此次会议中的姓名...',
+              hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+              filled: true,
+              fillColor: AppColors.background,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () => Navigator.of(ctx).pop(editController.text.trim()),
+              child: const Text('保存修改'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            onPressed: () => Navigator.of(ctx).pop(editController.text.trim()),
-            child: const Text('保存修改'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      editController.dispose();
+    }
 
     if (newName != null && newName.isNotEmpty && mounted) {
       setState(() {
@@ -664,13 +683,27 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     );
   }
 
-  /// 顶部状态信息栏
+  /// 顶部状态信息栏 (支持窄屏自适应，彻底消除横向溢出)
   Widget _buildTopHeader() {
     final isRecording = _recorderState == MeetingRecorderState.recording;
     final isPaused = _recorderState == MeetingRecorderState.paused;
+    final isCompact = MediaQuery.of(context).size.width < 600;
+
+    String shortSourceLabel;
+    switch (_selectedSourceMode) {
+      case AudioSourceMode.microphone:
+        shortSourceLabel = isCompact ? '麦克风' : _selectedSourceMode.title;
+        break;
+      case AudioSourceMode.systemAudio:
+        shortSourceLabel = isCompact ? '系统内录' : _selectedSourceMode.title;
+        break;
+      case AudioSourceMode.both:
+        shortSourceLabel = isCompact ? '双路音源' : _selectedSourceMode.title;
+        break;
+    }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 20, vertical: 10),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
@@ -684,31 +717,33 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               borderRadius: BorderRadius.circular(8),
               onTap: _handleBack,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: AppColors.surfaceElevated,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: AppColors.cardBorder),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.arrow_back_ios_new_rounded, size: 13, color: AppColors.textSecondary),
-                    SizedBox(width: 6),
-                    Text(
-                      '纪要库',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
+                    const Icon(Icons.arrow_back_ios_new_rounded, size: 13, color: AppColors.textSecondary),
+                    if (!isCompact) ...[
+                      const SizedBox(width: 6),
+                      const Text(
+                        '纪要库',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textSecondary,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 14),
+          SizedBox(width: isCompact ? 10 : 14),
           // 状态光环与文字
           AnimatedBuilder(
             animation: _pulseScaleAnim,
@@ -716,8 +751,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               return Transform.scale(
                 scale: isRecording ? _pulseScaleAnim.value : 1.0,
                 child: Container(
-                  width: 12,
-                  height: 12,
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isRecording
@@ -737,22 +772,26 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               );
             },
           ),
-          const SizedBox(width: 10),
-          Text(
-            isRecording ? '实时转录中' : (isPaused ? '转录已暂停' : '待命就绪'),
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-              color: isRecording ? Colors.white : (isPaused ? AppColors.amber : AppColors.textSecondary),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              isRecording ? '实时转录中' : (isPaused ? '已暂停' : '待命就绪'),
+              style: TextStyle(
+                fontSize: isCompact ? 13.5 : 15,
+                fontWeight: FontWeight.bold,
+                color: isRecording ? Colors.white : (isPaused ? AppColors.amber : AppColors.textSecondary),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isCompact ? 8 : 14),
           // 局部高性能计时器 (不导致父级组件全部重绘)
-          _MeetingTimerDisplay(elapsedNotifier: _elapsedMsNotifier),
+          _MeetingTimerDisplay(elapsedNotifier: _elapsedMsNotifier, isCompact: isCompact),
           const Spacer(),
           // 当前音源状态微标
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 10, vertical: 4),
             decoration: BoxDecoration(
               color: AppColors.surfaceElevated,
               borderRadius: BorderRadius.circular(20),
@@ -767,13 +806,13 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
                       : (_selectedSourceMode == AudioSourceMode.systemAudio
                           ? Icons.volume_up_rounded
                           : Icons.tune_rounded),
-                  size: 14,
+                  size: 13,
                   color: AppColors.primary,
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 Text(
-                  _selectedSourceMode.title,
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
+                  shortSourceLabel,
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
                 ),
               ],
             ),
@@ -852,62 +891,116 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     );
   }
 
-  /// 待命配置界面 (未点击开始录音前的精致就绪引导)
+  /// 待命配置界面 (未点击开始录音前的精致就绪引导，手机端高度紧凑确保首屏直达开始按钮)
   Widget _buildIdleSetupView() {
+    final isCompact = MediaQuery.of(context).size.width < 600;
+    final isWindowsNative = NativeAudioBridge.isWindowsNativeSupported;
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
+      padding: EdgeInsets.all(isCompact ? 16 : 28),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 12),
-              // 顶部科技徽标
-              Center(
-                child: Container(
-                  width: 72,
-                  height: 72,
+              SizedBox(height: isCompact ? 4 : 12),
+              if (isCompact)
+                // 手机端：采用紧凑横幅式头部，释放纵向空间
+                Container(
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppColors.primary, AppColors.primaryDark],
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.primary.withValues(alpha: 0.2),
+                        AppColors.surface,
+                      ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.primary.withValues(alpha: 0.35),
-                        blurRadius: 20,
-                        offset: const Offset(0, 8),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [AppColors.primary, AppColors.primaryDark],
+                          ),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.mic_none_rounded, color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '开启全新实时会议纪要',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              '16kHz 离线端侧识别 · 在线声纹聚类 · 音字同步',
+                              style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                  child: const Icon(Icons.mic_none_rounded, color: Colors.white, size: 36),
+                )
+              else ...[
+                // 桌面端：完整科技感徽标
+                Center(
+                  child: Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [AppColors.primary, AppColors.primaryDark],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.35),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.mic_none_rounded, color: Colors.white, size: 36),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              const Center(
-                child: Text(
-                  '开启全新实时会议纪要',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                const SizedBox(height: 18),
+                const Center(
+                  child: Text(
+                    '开启全新实时会议纪要',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              const Center(
-                child: Text(
-                  '多音源硬件分离 · 在线声纹聚类 · 毫秒级音字同步',
-                  style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+                const SizedBox(height: 6),
+                const Center(
+                  child: Text(
+                    '多音源硬件分离 · 在线声纹聚类 · 毫秒级音字同步',
+                    style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 32),
+              ],
+              SizedBox(height: isCompact ? 14 : 28),
 
               // 会议标题输入框
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.all(isCompact ? 14 : 16),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: AppColors.cardBorder),
                 ),
                 child: Column(
@@ -924,7 +1017,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: AppColors.surfaceElevated,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide.none,
@@ -936,63 +1030,84 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: isCompact ? 12 : 20),
 
               // 音源选择卡片组
               Container(
-                padding: const EdgeInsets.all(18),
+                padding: EdgeInsets.all(isCompact ? 14 : 18),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: AppColors.cardBorder),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Row(
+                    Row(
                       children: [
-                        Icon(Icons.tune_rounded, color: AppColors.primary, size: 18),
-                        SizedBox(width: 8),
-                        Text(
+                        const Icon(Icons.tune_rounded, color: AppColors.primary, size: 17),
+                        const SizedBox(width: 8),
+                        const Text(
                           '选择输入音源',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Colors.white),
                         ),
-                        Spacer(),
+                        const Spacer(),
                         Text(
-                          '支持随时切换',
-                          style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                          isWindowsNative ? '支持随时切换' : '移动端高清拾音',
+                          style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    _buildSourceOptionTile(
-                      mode: AudioSourceMode.both,
-                      icon: Icons.multitrack_audio_rounded,
-                      title: '麦克风 + 系统声音 (推荐)',
-                      subtitle: '双向全捕获：近端发言与远端腾讯会议/Zoom/钉钉声音同时清晰识别',
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSourceOptionTile(
-                      mode: AudioSourceMode.microphone,
-                      icon: Icons.mic_rounded,
-                      title: '仅麦克风输入',
-                      subtitle: '只捕获物理麦克风近端人声，适合单人现场口述与线下独立访谈',
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSourceOptionTile(
-                      mode: AudioSourceMode.systemAudio,
-                      icon: Icons.speaker_rounded,
-                      title: '仅系统声音 (扬声器内录)',
-                      subtitle: '只捕获电脑正在播放的声音，免受周围环境噪音干扰，适合网课与远程宣讲',
-                    ),
+                    const SizedBox(height: 12),
+                    if (isWindowsNative) ...[
+                      _buildSourceOptionTile(
+                        mode: AudioSourceMode.both,
+                        icon: Icons.multitrack_audio_rounded,
+                        title: '麦克风 + 系统声音 (推荐)',
+                        subtitle: '双向全捕获：近端发言与远端腾讯会议/Zoom/钉钉声音同时清晰识别',
+                        isCompact: isCompact,
+                      ),
+                      const SizedBox(height: 8),
+                      _buildSourceOptionTile(
+                        mode: AudioSourceMode.microphone,
+                        icon: Icons.mic_rounded,
+                        title: '仅麦克风输入',
+                        subtitle: '只捕获物理麦克风近端人声，适合单人现场口述与线下独立访谈',
+                        isCompact: isCompact,
+                      ),
+                      const SizedBox(height: 8),
+                      _buildSourceOptionTile(
+                        mode: AudioSourceMode.systemAudio,
+                        icon: Icons.speaker_rounded,
+                        title: '仅系统声音 (扬声器内录)',
+                        subtitle: '只捕获电脑正在播放的声音，免受周围环境噪音干扰，适合网课与远程宣讲',
+                        isCompact: isCompact,
+                      ),
+                    ] else ...[
+                      _buildSourceOptionTile(
+                        mode: AudioSourceMode.microphone,
+                        icon: Icons.mic_rounded,
+                        title: '手机高灵敏度麦克风阵列 (推荐)',
+                        subtitle: '16kHz 硬件降噪直采，自动区分多位现场发言人并流式生成文字',
+                        isCompact: isCompact,
+                      ),
+                      const SizedBox(height: 8),
+                      _buildSourceOptionTile(
+                        mode: AudioSourceMode.both,
+                        icon: Icons.multitrack_audio_rounded,
+                        title: '免提外放增强模式 (会议/网课)',
+                        subtitle: '同时拾取近端人声与扬声器外放内容，自适应弱音增益补偿',
+                        isCompact: isCompact,
+                      ),
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(height: 28),
+              SizedBox(height: isCompact ? 18 : 28),
 
               // 开始录音转录大按钮
               SizedBox(
-                height: 52,
+                height: isCompact ? 48 : 52,
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
@@ -1001,10 +1116,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
                     shadowColor: AppColors.primary.withValues(alpha: 0.5),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
                   ),
-                  icon: const Icon(Icons.play_arrow_rounded, size: 26),
+                  icon: const Icon(Icons.play_arrow_rounded, size: 24),
                   label: const Text(
                     '开始会议转录',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                   ),
                   onPressed: _handleStartTranscription,
                 ),
@@ -1022,6 +1137,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     required IconData icon,
     required String title,
     required String subtitle,
+    bool isCompact = false,
   }) {
     final isSelected = _selectedSourceMode == mode;
     return InkWell(
@@ -1033,7 +1149,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.all(isCompact ? 11 : 14),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.primary.withValues(alpha: 0.12) : AppColors.surfaceElevated,
           borderRadius: BorderRadius.circular(12),
@@ -1045,14 +1161,14 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: EdgeInsets.all(isCompact ? 8 : 10),
               decoration: BoxDecoration(
                 color: isSelected ? AppColors.primary : AppColors.surface,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: isSelected ? Colors.white : AppColors.textSecondary, size: 20),
+              child: Icon(icon, color: isSelected ? Colors.white : AppColors.textSecondary, size: isCompact ? 18 : 20),
             ),
-            const SizedBox(width: 14),
+            SizedBox(width: isCompact ? 10 : 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1060,22 +1176,28 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
                   Text(
                     title,
                     style: TextStyle(
-                      fontSize: 14,
+                      fontSize: isCompact ? 13 : 14,
                       fontWeight: FontWeight.bold,
                       color: isSelected ? Colors.white : AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: TextStyle(fontSize: 12, color: isSelected ? AppColors.textSecondary : AppColors.textMuted),
+                    style: TextStyle(
+                      fontSize: isCompact ? 11 : 12,
+                      color: isSelected ? AppColors.textSecondary : AppColors.textMuted,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
             Container(
-              width: 20,
-              height: 20,
+              width: 18,
+              height: 18,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
@@ -1086,8 +1208,8 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               child: isSelected
                   ? Center(
                       child: Container(
-                        width: 10,
-                        height: 10,
+                        width: 9,
+                        height: 9,
                         decoration: const BoxDecoration(
                           shape: BoxShape.circle,
                           color: AppColors.primary,
@@ -1394,9 +1516,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     }
 
     final isRecording = _recorderState == MeetingRecorderState.recording;
+    final isCompact = MediaQuery.of(context).size.width < 600;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      padding: EdgeInsets.symmetric(horizontal: isCompact ? 14 : 24, vertical: 12),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.cardBorder, width: 1)),
@@ -1404,41 +1527,50 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       child: SafeArea(
         top: false,
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
             // 暂停 / 恢复转录按钮
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: BorderSide(color: isRecording ? AppColors.amber : AppColors.emerald),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-              ),
-              icon: Icon(
-                isRecording ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                color: isRecording ? AppColors.amber : AppColors.emerald,
-              ),
-              label: Text(
-                isRecording ? '暂停转录' : '恢复转录',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
+            Expanded(
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(color: isRecording ? AppColors.amber : AppColors.emerald),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                icon: Icon(
+                  isRecording ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  size: 20,
                   color: isRecording ? AppColors.amber : AppColors.emerald,
                 ),
+                label: Text(
+                  isRecording ? '暂停转录' : '恢复转录',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: isRecording ? AppColors.amber : AppColors.emerald,
+                  ),
+                ),
+                onPressed: _togglePauseResume,
               ),
-              onPressed: _togglePauseResume,
             ),
+            const SizedBox(width: 12),
             // 完成并生成纪要大按钮
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.rose,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                elevation: 4,
+            Expanded(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.rose,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                  elevation: 4,
+                ),
+                icon: const Icon(Icons.stop_rounded, size: 20),
+                label: Text(
+                  isCompact ? '结束并保存' : '结束并保存纪要',
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
+                ),
+                onPressed: _handleFinishMeeting,
               ),
-              icon: const Icon(Icons.stop_rounded),
-              label: const Text('结束并保存纪要', style: TextStyle(fontWeight: FontWeight.bold)),
-              onPressed: _handleFinishMeeting,
             ),
           ],
         ),
@@ -1460,8 +1592,9 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 /// 局部高刷新率计时器组件 (避免导致外层全列表 rebuild)
 class _MeetingTimerDisplay extends StatelessWidget {
   final ValueNotifier<int> elapsedNotifier;
+  final bool isCompact;
 
-  const _MeetingTimerDisplay({required this.elapsedNotifier});
+  const _MeetingTimerDisplay({required this.elapsedNotifier, this.isCompact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1474,7 +1607,7 @@ class _MeetingTimerDisplay extends StatelessWidget {
         final seconds = (d.inSeconds % 60).toString().padLeft(2, '0');
 
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 10, vertical: 3),
           decoration: BoxDecoration(
             color: AppColors.surfaceElevated,
             borderRadius: BorderRadius.circular(6),
@@ -1482,12 +1615,12 @@ class _MeetingTimerDisplay extends StatelessWidget {
           ),
           child: Text(
             '$hours:$minutes:$seconds',
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'monospace',
-              fontSize: 15,
+              fontSize: isCompact ? 13 : 15,
               fontWeight: FontWeight.bold,
               color: Colors.white,
-              letterSpacing: 1.0,
+              letterSpacing: 0.8,
             ),
           ),
         );

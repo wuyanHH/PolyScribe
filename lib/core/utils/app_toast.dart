@@ -49,7 +49,6 @@ class AppToast {
         borderColor = AppColors.rose.withValues(alpha: 0.35);
         break;
       case ToastType.info:
-      default:
         icon = Icons.info_outline_rounded;
         iconColor = Colors.white70;
         borderColor = AppColors.cardBorder;
