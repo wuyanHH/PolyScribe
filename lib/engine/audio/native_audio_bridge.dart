@@ -34,7 +34,7 @@ class NativeAudioBridge {
     required String inputPath,
     required String outputPath,
     int targetSampleRate = 16000,
-    Duration timeout = const Duration(seconds: 60),
+    Duration timeout = const Duration(seconds: 180),
   }) async {
     if (kIsWeb) return false;
     try {
@@ -50,6 +50,9 @@ class NativeAudioBridge {
         },
       );
       if (res is Map) {
+        if (res['success'] != true && res.containsKey('error')) {
+          debugPrint('[NativeAudioBridge] 原生音频解码失败，底层报告: ${res['error']}');
+        }
         return res['success'] == true;
       }
       if (res is bool) {

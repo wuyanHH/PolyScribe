@@ -11,6 +11,7 @@ import 'meeting/live_meeting_screen.dart';
 import 'models/model_manager_screen.dart';
 import 'settings/settings_screen.dart';
 import 'voiceprint/voiceprint_vault_screen.dart';
+import 'widgets/polyscribe_logo.dart';
 
 /// 全局响应式五联主导航框架 (现代深空质感 / 桌面端侧边工作台 + 移动端底部导航)
 class MainNavigationScreen extends StatefulWidget {
@@ -89,11 +90,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
     if (isDesktop) {
       return Scaffold(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.bg,
         body: Row(
           children: [
             _buildDesktopSidebar(isWideDesktop, isServerRunning),
-            VerticalDivider(width: 1, thickness: 1, color: AppColors.cardBorder),
+            VerticalDivider(width: 1, thickness: 1, color: context.borderColor),
             Expanded(
               child: IndexedStack(
                 index: _currentIndex,
@@ -106,31 +107,32 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.bg,
       body: IndexedStack(
         index: _currentIndex,
         children: _cachedPages,
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.cardBorder, width: 1)),
+          color: context.surfaceColor,
+          border: Border(top: BorderSide(color: context.borderColor, width: 1)),
         ),
         child: NavigationBarTheme(
           data: NavigationBarThemeData(
-            backgroundColor: AppColors.surface,
+            backgroundColor: context.surfaceColor,
             indicatorColor: AppColors.primaryGlow,
             height: 66,
             iconTheme: WidgetStateProperty.resolveWith((states) {
               if (states.contains(WidgetState.selected)) {
                 return const IconThemeData(color: AppColors.primary, size: 22);
               }
-              return IconThemeData(color: AppColors.textMuted, size: 21);
+              return IconThemeData(color: context.textGrey, size: 21);
             }),
             labelTextStyle: WidgetStateProperty.resolveWith((states) {
               if (states.contains(WidgetState.selected)) {
                 return const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold);
               }
-              return TextStyle(color: AppColors.textSecondary, fontSize: 11);
+              return TextStyle(color: context.textSub, fontSize: 11);
             }),
           ),
           child: NavigationBar(
@@ -201,7 +203,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
     return Container(
       width: isExtended ? 228 : 84,
-      color: AppColors.surface,
+      color: context.surfaceColor,
       child: SafeArea(
         child: Column(
           children: [
@@ -214,28 +216,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               child: Row(
                 mainAxisAlignment: isExtended ? MainAxisAlignment.start : MainAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.primaryDark],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.35),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 24),
-                    ),
-                  ),
+                  const PolyScribeLogo(size: 42),
                   if (isExtended) ...[
                     const SizedBox(width: 12),
                     Expanded(
@@ -247,7 +228,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                               Text(
                                 AppConstants.appFullName,
                                 style: TextStyle(
-                                  color: AppColors.textPrimary,
+                                  color: context.textMain,
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 0.4,
@@ -261,7 +242,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           Text(
                             AppConstants.appEnglishName,
                             style: TextStyle(
-                              color: AppColors.textMuted,
+                              color: context.textGrey,
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -273,7 +254,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ],
               ),
             ),
-            Divider(height: 1, color: AppColors.cardBorder),
+            Divider(height: 1, color: context.borderColor),
             const SizedBox(height: 12),
 
             // 导航菜单列表
@@ -376,7 +357,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                                     Text(
                                       item.label,
                                       style: TextStyle(
-                                        color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                                        color: isSelected ? AppColors.primary : context.textSub,
                                         fontSize: 11,
                                         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                       ),
@@ -412,26 +393,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: AppColors.surfaceElevated,
+                          color: context.surfaceElevatedColor,
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: AppColors.cardBorder),
+                          border: Border.all(color: context.borderColor),
                         ),
                         child: isExtended
-                            ? const Row(
+                            ? Row(
                                 children: [
-                                  Icon(Icons.memory_rounded, size: 17, color: AppColors.primary),
-                                  SizedBox(width: 8),
+                                  const Icon(Icons.memory_rounded, size: 17, color: AppColors.primary),
+                                  const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       'AI 模型管理中心',
                                       style: TextStyle(
-                                        color: AppColors.textPrimary,
+                                        color: context.textMain,
                                         fontSize: 12,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
                                   ),
-                                  Icon(Icons.open_in_new_rounded, size: 13, color: AppColors.textMuted),
+                                  Icon(Icons.open_in_new_rounded, size: 13, color: context.textGrey),
                                 ],
                               )
                             : const Center(

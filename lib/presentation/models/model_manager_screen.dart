@@ -35,9 +35,19 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
     super.initState();
     _refreshStatus();
 
-    _progressSub = _downloadService.stateStream.listen((_) {
-      if (mounted) {
+    _progressSub = _downloadService.stateStream.listen((stateMap) {
+      if (!mounted) return;
+      // 检查是否有任务完成了安装解压或发生状态流转，只有此时才需要重新遍历文件系统
+      final bool hasStateTransition = stateMap.values.any((s) =>
+          s.status == ModelTaskStatus.completed ||
+          s.status == ModelTaskStatus.failed ||
+          s.status == ModelTaskStatus.idle);
+
+      if (hasStateTransition) {
         _checkInstalledOnly();
+      } else {
+        // 纯下载进度更新阶段：仅轻量 setState 刷新进度条，杜绝主线程重复文件系统 IO 导致卡顿
+        setState(() {});
       }
     });
   }
@@ -535,22 +545,22 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
     final isCompact = MediaQuery.of(context).size.width < 640;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: context.surfaceColor,
         elevation: 0,
         title: Text(
           isCompact ? 'AI 端侧模型管理' : 'AI 端侧模型下载与更新中心',
           style: TextStyle(
             fontSize: isCompact ? 15.5 : 16,
             fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
+            color: context.textMain,
           ),
         ),
         actions: [
           IconButton(
             tooltip: '检查模型版本更新',
-            icon: Icon(Icons.sync_rounded, color: AppColors.textPrimary),
+            icon: Icon(Icons.sync_rounded, color: context.textSub),
             onPressed: _checkUpdates,
           ),
           const SizedBox(width: 8),

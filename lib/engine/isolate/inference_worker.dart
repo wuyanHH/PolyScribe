@@ -301,10 +301,10 @@ Float32List _prepareSliceForAsr(Float32List input) {
   }
 
   final rms = sqrt(sumSq / input.length);
-  // 高保真纯净识别：仅对极端微弱信号 (Peak < 0.15 且 RMS < 0.01) 进行平滑柔和增益，最大增益严格限定为 2.0 倍
-  // 杜绝暴利放大背景白噪声与人声削波失真 (Clipping)
-  if (peak > 0.005 && rms > 0.0005 && peak < 0.15) {
-    final gain = min(0.45 / peak, 2.0);
+  // 高保真纯净识别：对微弱人声信号 (Peak < 0.25 且 RMS > 0.0001) 进行自适应平滑数字增益
+  // 兼顾手机麦克风近远场低音量采集与避免削波失真 (Clipping)
+  if (peak > 0.001 && rms > 0.0001 && peak < 0.25) {
+    final gain = min(0.40 / peak, 4.5);
     for (int i = 0; i < out.length; i++) {
       out[i] = (out[i] * gain).clamp(-0.95, 0.95);
     }
@@ -1272,9 +1272,9 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
           raf.closeSync();
         }
 
-        // 第二道全局声纹聚类收敛：合并相似度 >= 0.50 的冗余角色，彻底消除同一发言人多角色误切
+        // 第二道全局声纹聚类收敛：合并相似度 >= 0.42 的冗余角色，彻底消除同一发言人多角色误切
         if (message.enableDiarization) {
-          final speakerMergeMap = centroidBank.consolidateSpeakers(mergeThreshold: 0.50);
+          final speakerMergeMap = centroidBank.consolidateSpeakers(mergeThreshold: 0.42);
           if (speakerMergeMap.isNotEmpty) {
             for (int i = 0; i < segments.length; i++) {
               final oldSpk = segments[i].speakerId;

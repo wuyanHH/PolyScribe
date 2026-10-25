@@ -113,17 +113,17 @@ class OnlineCentroidBank {
     final isSemanticContinuation = hasContinuationPrefix || isShortAffirmation;
     final isTurnTaking = turnTakingPatterns.any((p) => p.hasMatch(text));
 
-    // 1. 语义驱动的强连续性平滑 (若前后间隔在 3.5 秒内且后句是承接连词/极短应答，优先继承上一发言人)
+    // 1. 语义驱动的强连续性平滑 (若前后间隔在 4.5 秒内且后句是承接连词/极短应答，优先继承上一发言人)
     if (_lastSpeakerId != null &&
         gap >= 0 &&
-        gap <= 3500 &&
+        gap <= 4500 &&
         isSemanticContinuation &&
         !isTurnTaking) {
       final lastCentroid = _centroids[_lastSpeakerId];
       if (lastCentroid != null) {
         final lastSim = _cosineSimilarity(normEmb, lastCentroid);
-        // 只要声学相似度不低于 0.45 (允许声调起伏或离麦克风距离变化)，依靠语义连续性直接锁定上一角色
-        if (lastSim >= 0.45) {
+        // 只要声学相似度不低于 0.38 (允许声调起伏或离麦克风距离变化)，依靠语义连续性直接锁定上一角色
+        if (lastSim >= 0.38) {
           _lastSpeechEndMs = endMs;
           if (durationMs >= AppConstants.minValidSpeechMs) {
             _updateCentroid(_lastSpeakerId!, normEmb);
@@ -138,19 +138,26 @@ class OnlineCentroidBank {
       }
     }
 
-    // 2. 连续发言时序平滑与短语音漂移抑制 (自然呼吸间隔 2.5 秒以内且时长较短时平滑继承)
+    // 2. 连续发言时序平滑与短语音漂移抑制 (自然呼吸间隔 4.5 秒以内且时长较短时平滑继承)
     if (_lastSpeakerId != null &&
         gap >= 0 &&
         gap <= AppConstants.maxSpeakerShiftGapMs &&
-        durationMs < AppConstants.minValidSpeechMs &&
         !isTurnTaking) {
-      _lastSpeechEndMs = endMs;
-      return CentroidMatchResult(
-        speakerId: _lastSpeakerId!,
-        speakerName: _speakerNames[_lastSpeakerId!],
-        similarity: 1.0,
-        isNewSpeaker: false,
-      );
+      final lastCentroid = _centroids[_lastSpeakerId];
+      final lastSim = lastCentroid != null ? _cosineSimilarity(normEmb, lastCentroid) : 0.0;
+      // 若时长较短 (< 1.0s) 或者与上一发言人相似度 >= 0.38，坚决平滑继承，杜绝同一个人中途换角
+      if (durationMs < AppConstants.minValidSpeechMs || lastSim >= 0.38) {
+        _lastSpeechEndMs = endMs;
+        if (durationMs >= AppConstants.minValidSpeechMs && lastCentroid != null) {
+          _updateCentroid(_lastSpeakerId!, normEmb);
+        }
+        return CentroidMatchResult(
+          speakerId: _lastSpeakerId!,
+          speakerName: _speakerNames[_lastSpeakerId!],
+          similarity: lastSim > 0 ? lastSim : 1.0,
+          isNewSpeaker: false,
+        );
+      }
     }
 
     // 3. 比对实名声纹库
@@ -180,9 +187,9 @@ class OnlineCentroidBank {
       }
     }
 
-    // 短语音匹配时允许适当宽容阈值 (-0.05)，防止特征微弱漂移新建角色
+    // 短语音匹配时允许适当宽容阈值 (-0.04)，防止特征微弱漂移新建角色
     final effectiveThreshold = durationMs < AppConstants.minValidSpeechMs
-        ? (similarityThreshold - 0.05).clamp(0.45, 0.70)
+        ? (similarityThreshold - 0.04).clamp(0.38, 0.65)
         : similarityThreshold;
 
     String finalSpeakerId;
@@ -261,7 +268,7 @@ class OnlineCentroidBank {
   /// 全局多角色后处理凝聚聚类与合并 (彻底消除“同一个人由于初期声音波动被误切为多个角色”)
   ///
   /// 返回各个待合并角色重定向映射关系：例如 {'SPK_02': 'SPK_01', 'SPK_03': 'SPK_01'}
-  Map<String, String> consolidateSpeakers({double mergeThreshold = 0.50}) {
+  Map<String, String> consolidateSpeakers({double mergeThreshold = 0.42}) {
     final spkIds = _centroids.keys.toList()..sort();
     if (spkIds.length <= 1) return {};
 

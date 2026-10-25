@@ -71,13 +71,29 @@ void main() {
       expect(dedup, equals('我们已经做好了准备'));
     });
 
-    test('上下文平滑合并 (mergeWithContext)', () {
-      // 消除重叠并连接
+    test('上下文平滑合并与智能标点补偿 (mergeWithContext)', () {
+      // 消除重叠并在连词边界智能注入标点，杜绝焊死无标点长句
       final prev = '这个功能已经实现完成';
       final curr = '已经实现完成并且测试通过了。';
 
       final merged = TranscriptCleaner.mergeWithContext(prev, curr);
-      expect(merged, equals('这个功能已经实现完成并且测试通过了。'));
+      expect(merged, equals('这个功能已经实现完成，并且测试通过了。'));
+    });
+
+    test('中文自然断句标点恢复器 (restoreChinesePunctuation)', () {
+      // 1. 语气助词后注入逗号，句末补齐句号
+      final text1 = '大家今天都在啊我们来讨论一下方案';
+      expect(
+        TranscriptCleaner.restoreChinesePunctuation(text1),
+        equals('大家今天都在啊，我们来讨论一下方案。'),
+      );
+
+      // 2. 连词前置标点注入与疑问句标点智能识别
+      final text2 = '原本计划下周上线但是现在需求变了是不是';
+      expect(
+        TranscriptCleaner.restoreChinesePunctuation(text2),
+        equals('原本计划下周上线，但是现在需求变了是不是？'),
+      );
     });
   });
 }

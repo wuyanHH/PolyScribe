@@ -189,6 +189,7 @@ class ModelDownloadService {
 
         int lastTime = DateTime.now().millisecondsSinceEpoch;
         int lastBytes = 0;
+        int lastProgressEmitTime = 0;
 
         await _dio.download(
           item.url,
@@ -211,6 +212,13 @@ class ModelDownloadService {
               lastBytes = received;
             }
 
+            // 核心防卡死节流机制：将 UI 事件广播频率严格控制在每 250ms 一次 (或下载完成瞬时触发)
+            final bool isItemDone = (total > 0 && received >= total);
+            if (!isItemDone && (now - lastProgressEmitTime < 250)) {
+              return;
+            }
+            lastProgressEmitTime = now;
+
             final currentOverallReceived = completedBaseBytes + received;
             final pRatio = (currentOverallReceived / totalModelBytes).clamp(0.0, 0.98);
 
@@ -231,12 +239,21 @@ class ModelDownloadService {
             speed: '正在解压并校验权重...',
           ));
 
-          await compute(_extractAndAlignArchive, {
-            'archivePath': tempFile.path,
-            'targetDirPath': targetDirPath,
-            'sandboxDirPath': sandboxDirPath,
-            'modelId': model.id,
-          });
+          try {
+            await compute(_extractAndAlignArchive, {
+              'archivePath': tempFile.path,
+              'targetDirPath': targetDirPath,
+              'sandboxDirPath': sandboxDirPath,
+              'modelId': model.id,
+            }).timeout(const Duration(seconds: 60));
+          } catch (extractErr) {
+            debugPrint('[ModelDownload] 解压发生异常或超时: $extractErr');
+            // 若解压失败，清理残留文件并抛出明确错误
+            if (tempFile.existsSync()) {
+              try { await tempFile.delete(); } catch (_) {}
+            }
+            throw Exception('模型解压校验失败: $extractErr');
+          }
 
           if (tempFile.existsSync()) {
             await tempFile.delete();

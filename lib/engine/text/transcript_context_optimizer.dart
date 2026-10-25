@@ -168,11 +168,15 @@ class TranscriptContextOptimizer {
         current = _mergeTwoSegments(current, next);
         mergedCounter++;
       } else {
-        result.add(current);
+        result.add(current.copyWith(
+          text: TranscriptCleaner.restoreChinesePunctuation(current.text),
+        ));
         current = next;
       }
     }
-    result.add(current);
+    result.add(current.copyWith(
+      text: TranscriptCleaner.restoreChinesePunctuation(current.text),
+    ));
 
     return ContextOptimizeResult(
       segments: result,
@@ -238,7 +242,12 @@ class TranscriptContextOptimizer {
 
   /// 合并两条段落并智能重构标点与时间区间 (基于 TranscriptCleaner 消除首尾重叠与平滑拼接)
   static TranscriptSegment _mergeTwoSegments(TranscriptSegment a, TranscriptSegment b) {
-    final mergedText = TranscriptCleaner.mergeWithContext(a.text, b.text);
+    final gapMs = b.startMs - a.endMs;
+    final mergedText = TranscriptCleaner.mergeWithContext(
+      a.text,
+      b.text,
+      gapMs: gapMs > 0 ? gapMs : 0,
+    );
 
     // 合并字词级时间戳 (如果有)
     final List<WordTimestamp> mergedWords = [...a.words, ...b.words];

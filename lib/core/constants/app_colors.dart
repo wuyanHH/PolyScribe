@@ -12,6 +12,7 @@ class AppColors {
   static const Color primary = Color(0xFFF97316); // 活力珊瑚橙
   static const Color primaryDark = Color(0xFFEA580C);
   static const Color primaryGlow = Color(0x40F97316);
+  // 基础深色主题色彩常量
   static const Color background = Color(0xFF0B0F19); // 更深邃沉浸的深黑背景 (Slate 950)
   static const Color surface = Color(0xFF131B2E); // 科技深蓝灰卡片表面
   static const Color surfaceLight = Color(0xFF1E293B);
@@ -20,12 +21,16 @@ class AppColors {
   static const Color textPrimary = Color(0xFFF8FAFC);
   static const Color textSecondary = Color(0xFF94A3B8);
   static const Color textMuted = Color(0xFF64748B);
-  static const Color emerald = Color(0xFF10B981);
-  static const Color amber = Color(0xFFF59E0B);
-  static const Color rose = Color(0xFFF43F5E);
-  static const Color cyan = Color(0xFF06B6D4);
+  static const Color darkBackground = background;
+  static const Color darkSurface = surface;
+  static const Color darkSurfaceLight = surfaceLight;
+  static const Color darkSurfaceElevated = surfaceElevated;
+  static const Color darkCardBorder = cardBorder;
+  static const Color darkTextPrimary = textPrimary;
+  static const Color darkTextSecondary = textSecondary;
+  static const Color darkTextMuted = textMuted;
 
-  // 浅色主题对应规范色彩
+  // 基础浅色主题色彩常量
   static const Color lightBackground = Color(0xFFF8FAFC);
   static const Color lightSurface = Color(0xFFFFFFFF);
   static const Color lightSurfaceElevated = Color(0xFFF1F5F9);
@@ -33,6 +38,11 @@ class AppColors {
   static const Color lightTextPrimary = Color(0xFF0F172A);
   static const Color lightTextSecondary = Color(0xFF475569);
   static const Color lightTextMuted = Color(0xFF94A3B8);
+
+  static const Color emerald = Color(0xFF10B981);
+  static const Color amber = Color(0xFFF59E0B);
+  static const Color rose = Color(0xFFF43F5E);
+  static const Color cyan = Color(0xFF06B6D4);
 
   /// 六大预设角色专属高对比度色彩池
   static const List<SpeakerColor> speakerPalette = [

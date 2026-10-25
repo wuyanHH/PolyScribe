@@ -215,9 +215,9 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
     final isCompact = MediaQuery.of(context).size.width < 600;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: context.surfaceColor,
         elevation: 0,
         titleSpacing: isCompact ? 12 : 20,
         title: Row(
@@ -235,16 +235,16 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     '实名声纹特征库',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textMain),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (!isCompact)
-                    const Text(
+                    Text(
                       'CAM++ 192维特征向量 · 在线质心池 EMA 平滑演进',
-                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      style: TextStyle(fontSize: 11, color: context.textGrey),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),

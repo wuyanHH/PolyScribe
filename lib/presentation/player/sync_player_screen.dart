@@ -64,6 +64,8 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
   int _lastAutoScrolledIndex = -1; // 上次自动滚动的段落序号，防止同一段重复微颤
   Timer? _searchDebounceTimer;
   int _lastUiRenderTimestamp = 0;
+  bool _isRefreshing = false;
+  StreamSubscription? _progressSubscription;
 
   @override
   void initState() {
@@ -72,6 +74,13 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
     _controller = SyncPlayController();
     _loadSegments();
     _controller.addListener(_onPlayerStateChanged);
+
+    // 实时监听后台切片转写流：若当前正在转录本任务，自动实时刷出最新段落
+    _progressSubscription = TaskQueueService.instance.onProgress.listen((notification) {
+      if (notification.taskId == widget.task.id) {
+        _refreshData(silent: true);
+      }
+    });
   }
 
   Future<void> _loadSegments() async {
@@ -84,6 +93,35 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  /// 实时拉取最新纪要段落与任务状态 (支持下拉手势刷新、点击刷新与后台切片静默推送)
+  Future<void> _refreshData({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() => _isRefreshing = true);
+    }
+    try {
+      final updatedTask = await AppDatabase.instance.getTask(widget.task.id);
+      if (updatedTask != null && mounted) {
+        setState(() {
+          _currentTitle = updatedTask.title;
+        });
+      }
+      final segments = await AppDatabase.instance.getSegmentsForTask(widget.task.id);
+      _controller.updateSegments(segments);
+      if (mounted) {
+        setState(() {});
+        if (!silent) {
+          AppToast.success(context, '纪要已实时刷新 (共 ${segments.length} 个段落)');
+        }
+      }
+    } catch (e) {
+      debugPrint('[SyncPlayer] 刷新纪要异常: $e');
+    } finally {
+      if (!silent && mounted) {
+        setState(() => _isRefreshing = false);
+      }
     }
   }
 
@@ -812,6 +850,7 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
 
   @override
   void dispose() {
+    _progressSubscription?.cancel();
     _searchDebounceTimer?.cancel();
     _controller.removeListener(_onPlayerStateChanged);
     _controller.dispose();
@@ -835,52 +874,69 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        titleSpacing: 0,
         title: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: _renameTitle,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
                   child: Text(
                     _currentTitle,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: TextStyle(
+                      fontSize: isWideDesktop ? 16 : 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 6),
-                const Icon(Icons.edit_outlined, size: 15, color: AppColors.textMuted),
+                const SizedBox(width: 4),
+                const Icon(Icons.edit_outlined, size: 14, color: AppColors.textMuted),
               ],
             ),
           ),
         ),
         actions: [
-          // 跟读吸附快捷开关 (高频交互，双端常驻)
-          if (isAudioAvailable)
-            IconButton(
-              tooltip: _autoScrollEnabled ? '跟读吸附已开启 (点击暂停吸附，自由翻阅)' : '跟读吸附已暂停 (点击恢复自动跟随)',
-              icon: Icon(
-                _autoScrollEnabled ? Icons.sync_rounded : Icons.sync_disabled_rounded,
-                color: _autoScrollEnabled ? AppColors.primary : AppColors.textMuted,
-                size: 20,
-              ),
-              onPressed: () {
-                setState(() {
-                  _autoScrollEnabled = !_autoScrollEnabled;
-                  if (_autoScrollEnabled) {
-                    _userScrolledAway = false;
-                  }
-                });
-                if (_autoScrollEnabled && state.activeSegmentIndex >= 0) {
-                  _scrollToIndex(state.activeSegmentIndex, force: true);
-                }
-              },
-            ),
+          // 1. 实时手动刷新按钮 (点击秒级拉取最新转录与编辑状态)
+          IconButton(
+            tooltip: '实时刷新纪要内容',
+            icon: _isRefreshing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                  )
+                : const Icon(Icons.refresh_rounded, size: 20),
+            onPressed: _isRefreshing ? null : () => _refreshData(),
+          ),
           // 桌面端宽屏专属：快捷动作平铺展开展示
           if (isWideDesktop) ...[
+            // 跟读吸附快捷开关 (桌面端常驻)
+            if (isAudioAvailable)
+              IconButton(
+                tooltip: _autoScrollEnabled ? '跟读吸附已开启 (点击暂停吸附，自由翻阅)' : '跟读吸附已暂停 (点击恢复自动跟随)',
+                icon: Icon(
+                  _autoScrollEnabled ? Icons.sync_rounded : Icons.sync_disabled_rounded,
+                  color: _autoScrollEnabled ? AppColors.primary : AppColors.textMuted,
+                  size: 20,
+                ),
+                onPressed: () {
+                  setState(() {
+                    _autoScrollEnabled = !_autoScrollEnabled;
+                    if (_autoScrollEnabled) {
+                      _userScrolledAway = false;
+                    }
+                  });
+                  if (_autoScrollEnabled && state.activeSegmentIndex >= 0) {
+                    _scrollToIndex(state.activeSegmentIndex, force: true);
+                  }
+                },
+              ),
             // 会话流聚合 / 逐句卡片 视图切换
             IconButton(
               tooltip: _isGroupedView ? '当前为：会话流聚合模式 (高密度，点击切换逐句卡片)' : '当前为：逐句卡片模式 (点击切换会话流聚合)',
@@ -910,7 +966,7 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
           ],
           IconButton(
             tooltip: _isSearching ? '收起搜索' : '纪要内搜索',
-            icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
+            icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded, size: 20),
             onPressed: () {
               setState(() {
                 _isSearching = !_isSearching;
@@ -922,7 +978,7 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             },
           ),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded),
+            icon: const Icon(Icons.more_vert_rounded, size: 20),
             color: AppColors.surfaceElevated,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -931,6 +987,17 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             onSelected: (value) {
               if (value == 'export') {
                 _showExportDialog();
+              } else if (value == 'toggle_autoscroll') {
+                setState(() {
+                  _autoScrollEnabled = !_autoScrollEnabled;
+                  if (_autoScrollEnabled) {
+                    _userScrolledAway = false;
+                  }
+                });
+                AppToast.info(context, _autoScrollEnabled ? '跟读吸附已开启' : '跟读吸附已暂停');
+                if (_autoScrollEnabled && state.activeSegmentIndex >= 0) {
+                  _scrollToIndex(state.activeSegmentIndex, force: true);
+                }
               } else if (value == 'toggle_view') {
                 setState(() {
                   _isGroupedView = !_isGroupedView;
@@ -978,6 +1045,27 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                     ],
                   ),
                 ),
+                if (isAudioAvailable)
+                  PopupMenuItem(
+                    value: 'toggle_autoscroll',
+                    child: Row(
+                      children: [
+                        Icon(
+                          _autoScrollEnabled ? Icons.sync_rounded : Icons.sync_disabled_rounded,
+                          size: 18,
+                          color: _autoScrollEnabled ? AppColors.primary : Colors.white70,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _autoScrollEnabled ? '暂停播放跟读吸附' : '开启播放跟读吸附',
+                          style: TextStyle(
+                            color: _autoScrollEnabled ? AppColors.primary : Colors.white,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const PopupMenuDivider(),
               ],
               const PopupMenuItem(
@@ -1045,7 +1133,12 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 const Divider(height: 1, color: AppColors.cardBorder),
                 if (!isAudioAvailable) _buildAudioMissingBanner(),
                 if (_isSearching) _buildSearchBar(),
-                if (!isWideDesktop && allSegments.isNotEmpty) _buildCompactSpeakerFilterBar(allSegments),
+                if (!isWideDesktop && allSegments.isNotEmpty) ...[
+                  Builder(builder: (context) {
+                    final speakerCount = allSegments.map((s) => s.speakerId).toSet().length;
+                    return speakerCount >= 2 ? _buildCompactSpeakerFilterBar(allSegments) : const SizedBox.shrink();
+                  }),
+                ],
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1069,55 +1162,67 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                                 }
                                 return false;
                               },
-                              child: visibleSegments.isEmpty
-                                  ? const Center(
-                                      child: Text('暂无转写段落', style: TextStyle(color: AppColors.textMuted)),
-                                    )
-                                  : _isGroupedView
-                                      ? Builder(builder: (context) {
-                                          final groups = _groupSegments(visibleSegments, allSegments);
-                                          return ListView.builder(
+                              child: RefreshIndicator(
+                                onRefresh: () => _refreshData(),
+                                color: AppColors.primary,
+                                backgroundColor: AppColors.surfaceElevated,
+                                child: visibleSegments.isEmpty
+                                    ? ListView(
+                                        children: const [
+                                          SizedBox(height: 120),
+                                          Center(
+                                            child: Text('暂无转写段落 (下拉可实时刷新)', style: TextStyle(color: AppColors.textMuted)),
+                                          ),
+                                        ],
+                                      )
+                                    : _isGroupedView
+                                        ? Builder(builder: (context) {
+                                            final groups = _groupSegments(visibleSegments, allSegments);
+                                            return ListView.builder(
+                                              controller: _scrollController,
+                                              physics: const AlwaysScrollableScrollPhysics(),
+                                              padding: EdgeInsets.fromLTRB(
+                                                MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                                12,
+                                                MediaQuery.of(context).size.width < 600 ? 12 : 20,
+                                                48,
+                                              ),
+                                              itemCount: groups.length,
+                                              itemBuilder: (context, idx) {
+                                                return _buildGroupedUtteranceCard(
+                                                  groups[idx],
+                                                  state,
+                                                  isAudioAvailable,
+                                                );
+                                              },
+                                            );
+                                          })
+                                        : ListView.builder(
                                             controller: _scrollController,
+                                            physics: const AlwaysScrollableScrollPhysics(),
                                             padding: EdgeInsets.fromLTRB(
                                               MediaQuery.of(context).size.width < 600 ? 12 : 20,
                                               12,
                                               MediaQuery.of(context).size.width < 600 ? 12 : 20,
                                               48,
                                             ),
-                                            itemCount: groups.length,
+                                            itemCount: visibleSegments.length,
                                             itemBuilder: (context, idx) {
-                                              return _buildGroupedUtteranceCard(
-                                                groups[idx],
-                                                state,
+                                              final seg = visibleSegments[idx];
+                                              final realIndex = allSegments.indexOf(seg);
+                                              final isActive = state.activeSegmentIndex == realIndex;
+                                              final speakerColor = AppColors.getSpeakerColor(seg.speakerId);
+
+                                              return _buildSegmentCard(
+                                                seg,
+                                                realIndex,
+                                                isActive,
+                                                speakerColor,
                                                 isAudioAvailable,
                                               );
                                             },
-                                          );
-                                        })
-                                      : ListView.builder(
-                                          controller: _scrollController,
-                                          padding: EdgeInsets.fromLTRB(
-                                            MediaQuery.of(context).size.width < 600 ? 12 : 20,
-                                            12,
-                                            MediaQuery.of(context).size.width < 600 ? 12 : 20,
-                                            48,
                                           ),
-                                          itemCount: visibleSegments.length,
-                                          itemBuilder: (context, idx) {
-                                            final seg = visibleSegments[idx];
-                                            final realIndex = allSegments.indexOf(seg);
-                                            final isActive = state.activeSegmentIndex == realIndex;
-                                            final speakerColor = AppColors.getSpeakerColor(seg.speakerId);
-
-                                            return _buildSegmentCard(
-                                              seg,
-                                              realIndex,
-                                              isActive,
-                                              speakerColor,
-                                              isAudioAvailable,
-                                            );
-                                          },
-                                        ),
+                              ),
                             ),
                             // 用户翻阅历史离开当前行时，右下角优雅悬浮「回到播放行」药丸提示
                             if (_userScrolledAway && isAudioAvailable && state.activeSegmentIndex >= 0)
@@ -1645,15 +1750,14 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             ),
             child: Row(
               children: [
-                // 发言人头像与姓名 (自适应柔性约束与独立点击改名，杜绝长昵称横向溢出)
-                Flexible(
+                // 1. 发言人头像与姓名 (占据主要弹性空间，保证角色姓名清晰完整显示，绝不被时间戳压缩)
+                Expanded(
                   child: InkWell(
                     borderRadius: BorderRadius.circular(6),
                     onTap: () => _editSpeakerRoleName(group.speakerId, group.speakerName),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Container(
                             width: 22,
@@ -1698,27 +1802,32 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                     ),
                   ),
                 ),
-                const Spacer(),
-                // 起止总时间
-                Text(
-                  '${_formatTime(group.startMs)} - ${_formatTime(group.endMs)}',
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: AppColors.textMuted),
+                const SizedBox(width: 8),
+                // 2. 右侧起止时间与总句数徽章 (紧凑排布)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${_formatTime(group.startMs)} - ${_formatTime(group.endMs)}',
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppColors.textMuted),
+                    ),
+                    if (group.segments.length > 1) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppColors.background,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: AppColors.cardBorder),
+                        ),
+                        child: Text(
+                          '${group.segments.length}句',
+                          style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                if (group.segments.length > 1) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: AppColors.cardBorder),
-                    ),
-                    child: Text(
-                      '${group.segments.length} 句',
-                      style: const TextStyle(fontSize: 10.5, color: AppColors.textMuted),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -1855,8 +1964,8 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             children: [
               Row(
                 children: [
-                  // 角色色标徽章 (柔性自适应与点击修改角色姓名，杜绝长昵称溢出)
-                  Flexible(
+                  // 1. 角色色标徽章 (占据弹性主导空间，保障角色姓名舒展呈现，绝不被时间戳压缩)
+                  Expanded(
                     child: InkWell(
                       borderRadius: BorderRadius.circular(6),
                       onTap: () => _editSpeakerRoleName(seg.speakerId, roleName),
@@ -1868,7 +1977,6 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                           border: Border.all(color: speakerColor.color.withValues(alpha: 0.4)),
                         ),
                         child: Row(
-                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
                               width: 7,
@@ -1902,31 +2010,37 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                       ),
                     ),
                   ),
-                  const Spacer(),
-                  Text(
-                    '${_formatTime(seg.startMs)} - ${_formatTime(seg.endMs)}',
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: AppColors.textMuted),
-                  ),
                   const SizedBox(width: 8),
-                  Tooltip(
-                    message: '校对修改此段文字',
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(4),
-                      onTap: () => _editSegmentText(seg),
-                      child: const Padding(
-                        padding: EdgeInsets.all(3),
-                        child: Icon(Icons.edit_note_rounded, size: 17, color: AppColors.textMuted),
+                  // 2. 右侧紧凑时间戳与修改操作
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${_formatTime(seg.startMs)} - ${_formatTime(seg.endMs)}',
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppColors.textMuted),
                       ),
-                    ),
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: '校对修改此段文字',
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(4),
+                          onTap: () => _editSegmentText(seg),
+                          child: const Padding(
+                            padding: EdgeInsets.all(3),
+                            child: Icon(Icons.edit_note_rounded, size: 16, color: AppColors.textMuted),
+                          ),
+                        ),
+                      ),
+                      if (isAudioAvailable) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          isActive ? Icons.graphic_eq_rounded : Icons.play_circle_outline_rounded,
+                          size: 16,
+                          color: isActive ? speakerColor.color : AppColors.textMuted,
+                        ),
+                      ],
+                    ],
                   ),
-                  if (isAudioAvailable) ...[
-                    const SizedBox(width: 4),
-                    Icon(
-                      isActive ? Icons.graphic_eq_rounded : Icons.play_circle_outline_rounded,
-                      size: 16,
-                      color: isActive ? speakerColor.color : AppColors.textMuted,
-                    ),
-                  ],
                 ],
               ),
               const SizedBox(height: 10),

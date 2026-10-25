@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PolyScribe (声织纪要) Android 原生冷启动中心矢量徽标 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="144dp"
+    android:height="144dp"
+    android:viewportWidth="144"
+    android:viewportHeight="144">
+
+    <!-- 深空科技圆角琉璃底座 -->
+    <path
+        android:fillColor="#131B2E"
+        android:strokeColor="#33F97316"
+        android:strokeWidth="1.5"
+        android:pathData="M40,18 L104,18 A22,22 0 0,1 126,40 L126,104 A22,22 0 0,1 104,126 L40,126 A22,22 0 0,1 18,104 L18,40 A22,22 0 0,1 40,18 Z" />
+
+    <!-- 192维超球面声纹扫描外环 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#2938BDF8"
+        android:strokeWidth="1.2"
+        android:pathData="M72,72 m-42,0 a42,42 0 1,0 84,0 a42,42 0 1,0 -84,0" />
+
+    <!-- 左二柱: 参会嘉宾 B (星云电光蓝) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M44,58 A4.5,4.5 0 0,1 53,58 L53,86 A4.5,4.5 0 0,1 44,86 Z" />
+
+    <!-- 左一柱: 主要嘉宾 A (翡翠薄荷绿) -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M56.5,47 A4.5,4.5 0 0,1 65.5,47 L65.5,97 A4.5,4.5 0 0,1 56.5,97 Z" />
+
+    <!-- 中心主峰: 主讲人 (活力珊瑚橙) -->
+    <path
+        android:fillColor="#F97316"
+        android:pathData="M67.5,36 A4.5,4.5 0 0,1 76.5,36 L76.5,108 A4.5,4.5 0 0,1 67.5,108 Z" />
+
+    <!-- 右一柱: 谐波共鸣柱 (琥珀流金) -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M78.5,45 A4.5,4.5 0 0,1 87.5,45 L87.5,99 A4.5,4.5 0 0,1 78.5,99 Z" />
+
+    <!-- 右二柱: 参会嘉宾 C (紫罗兰) -->
+    <path
+        android:fillColor="#A855F7"
+        android:pathData="M91,56 A4.5,4.5 0 0,1 100,56 L100,88 A4.5,4.5 0 0,1 91,88 Z" />
+
+    <!-- 右上角 AI 纪要灵光四角星芒 -->
+    <path
+        android:fillColor="#FDE047"
+        android:pathData="M98,37 L100.2,42.8 L106,45 L100.2,47.2 L98,53 L95.8,47.2 L90,45 L95.8,42.8 Z" />
+
+    <!-- 左下角对称声纹特征微粒 -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M45,98 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+</vector>

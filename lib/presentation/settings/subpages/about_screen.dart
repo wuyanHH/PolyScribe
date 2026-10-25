@@ -4,6 +4,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../services/keep_alive_service.dart';
+import '../../widgets/polyscribe_logo.dart';
 
 /// 关于 PolyScribe 详情页面 (规范二级菜单 / 检查更新 / 更新历史 / 更新功能介绍)
 class AboutScreen extends StatefulWidget {
@@ -47,7 +48,7 @@ class _AboutScreenState extends State<AboutScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '当前已安装 ${AppConstants.appFullName} ${AppConstants.appVersion} (Build ${AppConstants.appBuildNumber})，已包含全新模块化设置架构、端侧模型管理中枢升级、排版清洗器与存储空间治理。',
+              '当前已安装 ${AppConstants.appFullName} ${AppConstants.appVersion} (Build ${AppConstants.appBuildNumber})，已包含全新品牌徽标声波系统、优雅启动开屏动画、双端原生图标重构与全链路模型下载自愈。',
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.45),
             ),
             const SizedBox(height: 12),
@@ -149,28 +150,7 @@ class _AboutScreenState extends State<AboutScreen> {
       ),
       child: Column(
         children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppColors.primary, AppColors.primaryDark],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.35),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: const Center(
-              child: Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 38),
-            ),
-          ),
+          const PolyScribeLogo(size: 76),
           const SizedBox(height: 14),
           Text(
             AppConstants.appFullName,
@@ -377,9 +357,34 @@ class _AboutScreenState extends State<AboutScreen> {
   Widget _buildChangelogSection({required bool isCompact}) {
     final changelogs = [
       _ChangelogItem(
-        version: 'v0.1.0-beta.5',
+        version: 'v0.2.0-beta.2',
         date: '2026-10-25',
         isCurrent: true,
+        items: [
+          '【品牌视觉升级】重构现代化 PolyScribe 品牌微标与动态声波光效，全面提升系统辨识度。',
+          '【动态启动开屏】上线平滑渐变 SplashScreen 与快速跳过机制，解决启动黑白屏闪烁。',
+          '【双端原生图标】重构 Android 自适应矢量圆角图标与 Windows 高分辨率多级 ICO 资产。',
+          '【排版清洗优化】优化 TranscriptCleaner 段落标点与口吃平滑，纪要可读性显著提升。',
+          '【自动化测试】新增品牌徽标与启动开屏单元测试，全量 68 项自动化测试 100% 绿灯。',
+        ],
+      ),
+      _ChangelogItem(
+        version: 'v0.2.0-beta.1',
+        date: '2026-10-25',
+        isCurrent: false,
+        items: [
+          '【全网连接自愈】模型下载支持跳过 TLS 校验阻断，直连 ModelScope 国内高速 CDN。',
+          '【存储目录自定义】开放模型与数据存储目录自定义选择，支持数据全量无损迁移。',
+          '【无感主题切换】废除根组件销毁 Key，深浅模式切换平滑过渡且保留导航栈。',
+          '【模型沙盒隔离】模型采用独立子目录沙盒化存储，支持单模型干净卸载与向前兼容。',
+          '【高并发 WAL 调优】启用 SQLite WAL 模式，彻底杜绝高并发段落落库数据库锁。',
+          '【看门狗崩溃自愈】引入推理 Isolate 空闲自动休眠与崩溃重生看门狗机制，待机内存直降。',
+        ],
+      ),
+      _ChangelogItem(
+        version: 'v0.1.0-beta.5',
+        date: '2026-10-25',
+        isCurrent: false,
         items: [
           '【设置架构重构】拆分存储、录音偏好、开放服务与快捷键二级子页面，界面层级清晰规范。',
           '【模型中心重构】升级端侧模型管理中枢，卡片化展示下载/解压进度、多镜像源与规格。',

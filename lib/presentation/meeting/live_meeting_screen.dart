@@ -13,6 +13,8 @@ import '../../engine/audio/windows_wasapi_recorder.dart';
 import '../../engine/isolate/inference_worker.dart';
 import '../../engine/isolate/worker_message.dart';
 import '../../engine/model_manager.dart';
+import '../../engine/text/transcript_cleaner.dart';
+import '../../engine/text/transcript_context_optimizer.dart';
 import '../../services/keep_alive_service.dart';
 import '../models/model_manager_screen.dart';
 import '../player/sync_player_screen.dart';
@@ -198,6 +200,19 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       const sampleRate = 16000;
       final totalSamples = _accumulatedSamples.length;
 
+      // 0. 优先审查 AI 推理引擎工作线程就绪状态
+      final worker = InferenceWorkerCoordinator.instance;
+      if (!_isModelReady || !worker.isReady) {
+        // 若引擎正在唤醒或未连接，绝不丢弃有效音频，只做 30 秒安全滑动防爆内存
+        if (!_isEngineInitializing) {
+          _checkSystemEnvironment();
+        }
+        if (_accumulatedSamples.length > sampleRate * 30) {
+          _accumulatedSamples.removeRange(0, _accumulatedSamples.length - (sampleRate * 20));
+        }
+        return;
+      }
+
       // 计算当前累积音频的峰值与有效能量
       double peak = 0.0;
       double sumSq = 0.0;
@@ -210,7 +225,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       final overallRms = sqrt(sumSq / totalSamples);
 
       // 若整段完全是死寂静音，超过 3 秒则自动滑动丢弃前段静音并对齐起始时间，防止静音无限堆积
-      if (peak < 0.0025 && overallRms < 0.0005) {
+      if (peak < 0.0012 && overallRms < 0.0002) {
         if (totalSamples > sampleRate * 3 || forceFlush) {
           final dropCount = forceFlush ? totalSamples : (totalSamples - sampleRate ~/ 2);
           _accumulatedSamples.removeRange(0, dropCount);
@@ -219,39 +234,39 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
         return;
       }
 
-      // 非强制刷出时，至少累积 1.5 秒以上再判断断句
-      if (!forceFlush && totalSamples < (sampleRate * 1.5).toInt()) {
+      // 非强制刷出时，至少累积 1.0 秒以上再判断断句
+      if (!forceFlush && totalSamples < (sampleRate * 1.0).toInt()) {
         return;
       }
 
-      // 检查末尾 360ms 是否出现自然说话停顿 (静音谷底)
-      const tailWindow = 5760; // 0.36s @ 16kHz
+      // 检查末尾 250ms 是否出现自然说话停顿 (静音谷底)
+      const tailWindow = 4000; // 0.25s @ 16kHz
       bool hasTrailingPause = false;
-      if (totalSamples >= sampleRate * 1.6 && totalSamples > tailWindow) {
+      if (totalSamples >= (sampleRate * 1.2).toInt() && totalSamples > tailWindow) {
         double tailSumSq = 0.0;
         for (int i = totalSamples - tailWindow; i < totalSamples; i++) {
           final v = _accumulatedSamples[i];
           tailSumSq += v * v;
         }
         final tailRms = sqrt(tailSumSq / tailWindow);
-        if (tailRms < max(0.012, overallRms * 0.38)) {
+        if (tailRms < max(0.008, overallRms * 0.45)) {
           hasTrailingPause = true;
         }
       }
 
-      final reachedMaxWindow = totalSamples >= (sampleRate * 6.0).toInt();
+      final reachedMaxWindow = totalSamples >= (sampleRate * 3.2).toInt();
       if (!forceFlush && !hasTrailingPause && !reachedMaxWindow) {
         return;
       }
 
-      // 确定最佳切分位置：若因达到 6 秒上限而切分，在末尾 1.8 秒内寻找能量最低的 100ms 谷底切开，绝不截断正在说的词
+      // 确定最佳切分位置：若因达到 3.2 秒上限而切分，在末尾 1.0 秒内寻找能量最低的谷底切开，绝不截断正在说的词
       int cutCount = totalSamples;
-      if (!forceFlush && !hasTrailingPause && totalSamples > sampleRate * 4) {
-        const searchWin = 1600; // 100ms
-        final searchStart = max(sampleRate * 3, totalSamples - (sampleRate * 1.8).toInt());
+      if (!forceFlush && !hasTrailingPause && totalSamples > sampleRate * 2.5) {
+        const searchWin = 1200; // 75ms
+        final searchStart = max(sampleRate * 1.8, totalSamples - (sampleRate * 1.0).toInt());
         double minWinRms = double.infinity;
         int bestPos = totalSamples;
-        for (int pos = searchStart; pos + searchWin <= totalSamples; pos += 400) {
+        for (int pos = searchStart.toInt(); pos + searchWin <= totalSamples; pos += 300) {
           double wSq = 0.0;
           for (int k = 0; k < searchWin; k++) {
             final v = _accumulatedSamples[pos + k];
@@ -277,10 +292,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       final endMs = startMs + chunkDurationMs;
       _currentUtteranceStartMs = endMs;
 
-      if (sliceFloats.length < 4800) return; // 忽略不足 0.3 秒的极短碎片
-
-      final worker = InferenceWorkerCoordinator.instance;
-      if (!_isModelReady || !worker.isReady) return;
+      if (sliceFloats.length < 3200) return; // 忽略不足 0.2 秒的极短碎片
 
       final chunkIndex = _chunkCounter++;
       final res = await worker.transcribeChunk(TranscribeChunkCommand(
@@ -293,7 +305,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       ));
 
       if (res != null && res.isSuccess && res.text.trim().isNotEmpty) {
-        final text = res.text.trim();
+        String text = res.text.trim();
+        // 自动注入中文自然停顿标点（语气助词逗号断句、连词前置标点与末尾终结符）
+        text = TranscriptCleaner.restoreChinesePunctuation(text);
+
         // 过滤空标点与过短无意义杂音
         if (text.length >= 2 || RegExp(r'[\u4e00-\u9fa5a-zA-Z0-9]').hasMatch(text)) {
           final String spkId = res.speakerId.isNotEmpty ? res.speakerId : 'SPK_01';
@@ -331,8 +346,29 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
   Future<void> _handleStartTranscription() async {
     if (_recorderState != MeetingRecorderState.idle) return;
 
-    // 若模型未就绪，弹窗指引
+    // 智能自愈：若当前标志尚未就绪，快速重新探测本地模型并尝试唤醒工作线程
     if (!_isModelReady) {
+      final config = await ModelManager.instance.resolveModels();
+      if (config.isCurrentAsrReady || config.isAnyAsrReady) {
+        if (mounted) setState(() => _isEngineInitializing = true);
+        try {
+          final ok = await InferenceWorkerCoordinator.instance.initialize(config);
+          if (mounted) {
+            setState(() {
+              _isModelReady = ok;
+              _isEngineInitializing = false;
+            });
+          }
+        } catch (e) {
+          debugPrint('[LiveMeeting] 录制前紧急初始化异常: $e');
+          if (mounted) setState(() => _isEngineInitializing = false);
+        }
+      }
+    }
+
+    // 若本地完全没有任何识别模型，弹窗指引用户前往下载
+    if (!_isModelReady) {
+      if (!mounted) return;
       final shouldDownload = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -346,7 +382,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
             ],
           ),
           content: const Text(
-            'SenseVoice 离线语音识别模型尚未下载或正在加载。若未部署模型，将无法把现场人声转换为文字。\n是否立即前往模型管理中心一键下载？',
+            'SenseVoice 离线语音识别模型尚未下载。若未部署模型，将无法把现场人声转换为文字。\n是否立即前往模型管理中心一键高速下载？',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.5),
           ),
           actions: [
@@ -518,8 +554,16 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
       status: TaskStatus.completed,
     );
 
+    // 会议收官后处理：调用智能上下文整合优化引擎（包含双向三元组平滑、发言人漂移修正与自然停顿标点重构）
+    final optimized = TranscriptContextOptimizer.optimize(
+      _segments,
+      maxMergeGapMs: 2000,
+      enableSpeakerSmoothing: true,
+    );
+    final segmentsToSave = optimized.segments;
+
     await AppDatabase.instance.saveTask(task);
-    for (final seg in _segments) {
+    for (final seg in segmentsToSave) {
       await AppDatabase.instance.insertSegment(seg);
     }
 
@@ -664,7 +708,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
         _handleBack();
       },
       child: Scaffold(
-        backgroundColor: AppColors.background,
+        backgroundColor: context.bg,
         body: SafeArea(
           child: Column(
             children: [
@@ -704,9 +748,9 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
     return Container(
       padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 20, vertical: 10),
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
+      decoration: BoxDecoration(
+        color: context.surfaceColor,
+        border: Border(bottom: BorderSide(color: context.borderColor, width: 1)),
       ),
       child: Row(
         children: [
@@ -719,9 +763,9 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
               child: Container(
                 padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: AppColors.surfaceElevated,
+                  color: context.surfaceElevatedColor,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.cardBorder),
+                  border: Border.all(color: context.borderColor),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1521,9 +1565,9 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
     return Container(
       padding: EdgeInsets.symmetric(horizontal: isCompact ? 14 : 24, vertical: 12),
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(top: BorderSide(color: AppColors.cardBorder, width: 1)),
+      decoration: BoxDecoration(
+        color: context.surfaceColor,
+        border: Border(top: BorderSide(color: context.borderColor, width: 1)),
       ),
       child: SafeArea(
         top: false,

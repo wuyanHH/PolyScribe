@@ -133,10 +133,16 @@ class PredefinedModels {
     downloadItems: {
       ModelDownloadSource.official: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2',
-          destinationFileName: 'sense_voice.tar.bz2',
-          isArchive: true,
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/resolve/main/model.int8.onnx',
+          destinationFileName: 'sensevoice_small_int8.onnx',
+          isArchive: false,
           estimatedSizeBytes: 228 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/resolve/main/tokens.txt',
+          destinationFileName: 'tokens.txt',
+          isArchive: false,
+          estimatedSizeBytes: 315 * 1024,
         ),
       ],
       ModelDownloadSource.modelScope: [
@@ -184,10 +190,16 @@ class PredefinedModels {
       ],
       ModelDownloadSource.official: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-2023-09-14.tar.bz2',
-          destinationFileName: 'paraformer_zh.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 230 * 1024 * 1024,
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/model.int8.onnx',
+          destinationFileName: 'paraformer_model.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 243371218,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/tokens.txt',
+          destinationFileName: 'paraformer_tokens.txt',
+          isArchive: false,
+          estimatedSizeBytes: 147570,
         ),
       ],
     },
@@ -238,10 +250,28 @@ class PredefinedModels {
       ],
       ModelDownloadSource.official: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2',
-          destinationFileName: 'qwen3_asr.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 480 * 1024 * 1024,
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_conv_frontend.int8.onnx',
+          destinationFileName: 'qwen3_conv_frontend.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 10 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_encoder.int8.onnx',
+          destinationFileName: 'qwen3_encoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 200 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_decoder.int8.onnx',
+          destinationFileName: 'qwen3_decoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 270 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_tokenizer.json',
+          destinationFileName: 'qwen3_tokenizer.json',
+          isArchive: false,
+          estimatedSizeBytes: 500 * 1024,
         ),
       ],
     },
@@ -292,10 +322,28 @@ class PredefinedModels {
       ],
       ModelDownloadSource.official: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
-          destinationFileName: 'parakeet_tdt.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 450 * 1024 * 1024,
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/encoder.int8.onnx',
+          destinationFileName: 'parakeet_encoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 300 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/decoder.int8.onnx',
+          destinationFileName: 'parakeet_decoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 30 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/joiner.int8.onnx',
+          destinationFileName: 'parakeet_joiner.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 10 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/tokens.txt',
+          destinationFileName: 'parakeet_tokens.txt',
+          isArchive: false,
+          estimatedSizeBytes: 100 * 1024,
         ),
       ],
     },
@@ -346,10 +394,10 @@ class PredefinedModels {
     downloadItems: {
       ModelDownloadSource.official: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2',
-          destinationFileName: 'pyannote.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 6 * 1024 * 1024,
+          url: 'https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx',
+          destinationFileName: 'pyannote_segmentation.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 5992913,
         ),
       ],
       ModelDownloadSource.modelScope: [

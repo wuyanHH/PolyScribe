@@ -90,8 +90,8 @@ class TaskQueueService {
       if (sourceFile.existsSync()) {
         final audioDir = await AppStorageService.instance.getAudiosDirectory();
         final ext = p.extension(filePath);
-        final safeName = p.basenameWithoutExtension(filePath).replaceAll(RegExp(r'[^\w\u4e00-\u9fa5\-_]'), '_');
-        final destPath = p.join(audioDir.path, '${taskId}_$safeName$ext');
+        // 物理文件统一采用纯 ASCII 任务 ID 隔离命名，杜绝特殊标点/Emoji/空格导致底层解码器识别失败
+        final destPath = p.join(audioDir.path, '${taskId}_raw$ext');
         await sourceFile.copy(destPath);
         safeAudioPath = destPath;
       }
@@ -406,14 +406,15 @@ class TaskQueueService {
       throw Exception('语音识别模型未就绪 (${modelConfig.currentAsrName})，请前往模型管理中心下载模型后重试');
     }
 
-    // 全格式流式解码音频为 16kHz 单声道标准 WAV (带动态耗时与平滑进度反馈，告别 10% / 22% 假死状态)
+    // 全格式流式解码音频为 16kHz 单声道标准 WAV (带动态耗时与平滑进度反馈，告别假死状态)
     int decodeTicks = 0;
-    final decodeTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
+    final decodeTimer = Timer.periodic(const Duration(milliseconds: 600), (_) {
       decodeTicks++;
-      final p = (0.05 + (decodeTicks * 0.012)).clamp(0.05, 0.22);
-      final elapsedSec = (decodeTicks * 0.7).toStringAsFixed(1);
+      // 平滑推进进度 (从 5% 推进到 22.5%)
+      final p = (0.05 + (decodeTicks * 0.008)).clamp(0.05, 0.225);
+      final elapsedSec = (decodeTicks * 0.6).toStringAsFixed(1);
       final tip = decodeTicks > 15
-          ? '正在深度流式解码与重采样音频 (音频较长，已耗时 ${elapsedSec}s)...'
+          ? '正在流式解码与重采样音频 (大型音频文件，已耗时 ${elapsedSec}s)...'
           : '正在流式解码与重采样音频 (已耗时 ${elapsedSec}s)...';
       _progressController.add(TaskProgressEvent(
         taskId: task.id,
@@ -425,10 +426,10 @@ class TaskQueueService {
 
     DecodedAudioResult decoded;
     try {
-      // 引入 90 秒解码全局看门狗，彻底终结任何原生解码/FFmpeg/格式解析死锁卡在 22% 的顽疾
+      // 引入宽限看门狗，避免大音频/长篇播客被提前打断熔断
       decoded = await _decodeAudioFileTo16k(task.audioPath).timeout(
-        const Duration(seconds: 90),
-        onTimeout: () => throw TimeoutException('音频流式解码超时 (90s)，文件可能格式损坏或通道无响应'),
+        const Duration(seconds: 240),
+        onTimeout: () => throw TimeoutException('音频流式解码超时 (240s)，文件可能格式损坏或通道无响应'),
       );
     } finally {
       decodeTimer.cancel();
@@ -686,7 +687,7 @@ class TaskQueueService {
         inputPath: inputPath,
         outputPath: outWavPath,
         targetSampleRate: 16000,
-        timeout: const Duration(seconds: 45),
+        timeout: const Duration(seconds: 180),
       );
       if (nativeOk && File(outWavPath).existsSync() && File(outWavPath).lengthSync() > 44) {
         debugPrint('[TaskQueueService] 原生硬件引擎音频解码成功: $outWavPath');

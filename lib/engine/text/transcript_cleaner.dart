@@ -170,17 +170,25 @@ class TranscriptCleaner {
     return curr;
   }
 
-  /// 在上下文中平滑合并两段文本（包含重叠消除、标点承接与中英文间隔处理）
-  static String mergeWithContext(String previousText, String currentText) {
+  /// 在上下文中平滑合并两段文本（包含重叠消除、停顿标点补偿与中英文间隔处理）
+  ///
+  /// [previousText]: 前一句已识别文本
+  /// [currentText]: 当前刚识别出的文本
+  /// [gapMs]: 两句之间的静音发音停顿时间 (毫秒)，用于精准智能判定是短促逗号还是完整断句句号
+  static String mergeWithContext(
+    String previousText,
+    String currentText, {
+    int gapMs = 0,
+  }) {
     final cleanedCurrent = cleanRawText(currentText);
     final prev = cleanRawText(previousText);
 
-    if (prev.isEmpty) return cleanedCurrent;
-    if (cleanedCurrent.isEmpty) return prev;
+    if (prev.isEmpty) return restoreChinesePunctuation(cleanedCurrent);
+    if (cleanedCurrent.isEmpty) return restoreChinesePunctuation(prev);
 
     // 1. 去除首尾重叠
     final dedupCurrent = removeOverlap(prev, cleanedCurrent);
-    if (dedupCurrent.isEmpty) return prev;
+    if (dedupCurrent.isEmpty) return restoreChinesePunctuation(prev);
 
     final lastCharPrev = prev.substring(prev.length - 1);
     final firstCharCurr = dedupCurrent.substring(0, 1);
@@ -204,11 +212,107 @@ class TranscriptCleaner {
       }
       return '$prev$dedupCurrent';
     } else {
-      // 前句未打标点，两句属于同一个被切断的连续语流，平滑连接
-      if (isPrevAscii && isCurrAscii) {
-        return '$prev $dedupCurrent';
+      // 前句末尾无标点：根据发音停顿时长 [gapMs] 与承接语境，智能注入标点，杜绝无标点长文本焊死！
+      final isPrevChinese = RegExp(r'[\u4e00-\u9fa5]').hasMatch(lastCharPrev);
+      final isCurrChinese = RegExp(r'[\u4e00-\u9fa5]').hasMatch(firstCharCurr);
+
+      if (isPrevChinese && isCurrChinese) {
+        // 典型承接连词前缀优先补逗号
+        final isContinuation = continuationPrefixes.any((p) => dedupCurrent.startsWith(p));
+        if (gapMs >= 1500) {
+          // 停顿超过 1.5 秒视为完整长句子断开，注入句号
+          return '$prev。$dedupCurrent';
+        } else if (gapMs >= 350 || isContinuation || prev.length >= 6) {
+          // 停顿 350ms 以上，或后句有连词，或前句已有一定长度，注入逗号
+          return '$prev，$dedupCurrent';
+        } else {
+          // 极短呼吸连贯音，但在字数达到气口阈值时依然补逗号防挤压
+          return (prev.length >= 12) ? '$prev，$dedupCurrent' : '$prev$dedupCurrent';
+        }
+      } else {
+        // 包含英文或数字
+        if (gapMs >= 1200) {
+          return '$prev. $dedupCurrent';
+        } else if (gapMs >= 400 || prev.length >= 8) {
+          return '$prev, $dedupCurrent';
+        } else if (isPrevAscii && isCurrAscii) {
+          return '$prev $dedupCurrent';
+        } else {
+          return '$prev$dedupCurrent';
+        }
       }
-      return '$prev$dedupCurrent';
     }
+  }
+
+  /// 中文自然停顿与标点智能恢复器 (Smart Chinese Punctuation Restorer)
+  ///
+  /// 针对离线 ASR 模型在部分切片中丢失标点、或整合后无标点的长句，
+  /// 基于中文语气助词、连词语义边界与人类呼吸气口节奏进行优雅标点断句补全。
+  static String restoreChinesePunctuation(String text) {
+    if (text.trim().isEmpty) return text;
+    String res = cleanRawText(text);
+
+    // 1. 语气助词 (啊/呢/吧/呀/嘛/啦/哦/哈) 后面若接汉字且无标点，注入逗号
+    res = res.replaceAllMapped(
+      RegExp(r'([\u4e00-\u9fa5]{2,}[啊呢吧呀嘛啦哦哈哇呗])([\u4e00-\u9fa5])'),
+      (m) => '${m[1]}，${m[2]}',
+    );
+
+    // 2. 常见连词/转折词前置标点注入 (若连词前为汉字且无任何标点)
+    res = res.replaceAllMapped(
+      RegExp(r'([\u4e00-\u9fa5]{2,})(但是|然而|不过|可是|虽然|因为|所以|而且|并且|然后|另外|此外|也就是说|其实|那么|由此可见)'),
+      (m) => '${m[1]}，${m[2]}',
+    );
+
+    // 3. 常见时间与总结状语前置标点注入 (如 "与此同时"、"总的来说"、"总体而言")
+    res = res.replaceAllMapped(
+      RegExp(r'([\u4e00-\u9fa5]{3,})(与此同时|总的来说|总体而言|毫无疑问|众所周知)'),
+      (m) => '${m[1]}，${m[2]}',
+    );
+
+    // 4. 自然气口控制：若连续 20~30 个汉字无任何标点，寻找最合理的虚词/介词/副词弱停顿点注入逗号
+    final noPunctuationSegmentRegex = RegExp(r'([\u4e00-\u9fa5]{20,})');
+    res = res.replaceAllMapped(noPunctuationSegmentRegex, (match) {
+      String segment = match[1]!;
+      // 在 10 到 18 字区间内寻找适合断句的词位
+      final breakKeywords = ['对于', '关于', '根据', '按照', '同时', '现在', '目前', '进行', '通过', '如果', '建议'];
+      int bestCut = -1;
+      for (final kw in breakKeywords) {
+        final pos = segment.indexOf(kw, 8);
+        if (pos >= 8 && pos <= 18) {
+          bestCut = pos;
+          break;
+        }
+      }
+      if (bestCut == -1 && segment.length >= 22) {
+        // 无明显虚词，在 12~14 字中点自然断开
+        bestCut = 13;
+      }
+      if (bestCut > 0 && bestCut < segment.length) {
+        return '${segment.substring(0, bestCut)}，${segment.substring(bestCut)}';
+      }
+      return segment;
+    });
+
+    // 5. 规范化连续多余标点
+    res = _normalizePunctuations(res);
+
+    // 6. 末尾终结标点智能补齐 (若末尾无任何标点且为中文句子)
+    final trimmed = res.trim();
+    if (trimmed.isNotEmpty) {
+      final lastCh = trimmed.substring(trimmed.length - 1);
+      final hasTerm = terminatingPunctuations.contains(lastCh);
+      final hasPau = pausePunctuations.contains(lastCh);
+      if (!hasTerm && !hasPau && RegExp(r'[\u4e00-\u9fa5]').hasMatch(lastCh)) {
+        // 疑问助词结尾标问号，否则标句号
+        if (RegExp(r'(吗|呢|好吗|行吗|可以吗|对不对|是不是|为什么|如何)$').hasMatch(trimmed)) {
+          res = '$trimmed？';
+        } else {
+          res = '$trimmed。';
+        }
+      }
+    }
+
+    return res;
   }
 }

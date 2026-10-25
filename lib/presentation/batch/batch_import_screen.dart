@@ -301,9 +301,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     final isCompact = screenWidth < 640;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: context.surfaceColor,
         elevation: 0,
         titleSpacing: isCompact ? 12 : 20,
         title: Row(
@@ -321,16 +321,16 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     '外部音频转写中心',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: context.textMain),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (!isCompact)
-                    const Text(
+                    Text(
                       '全格式硬件解码 · 双声道物理分离 · 串行防 OOM 队列',
-                      style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                      style: TextStyle(fontSize: 11, color: context.textGrey),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -450,21 +450,21 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
+              color: context.surfaceElevatedColor,
               shape: BoxShape.circle,
-              border: Border.all(color: AppColors.cardBorder),
+              border: Border.all(color: context.borderColor),
             ),
             child: const Icon(Icons.audio_file_outlined, size: 42, color: AppColors.cyan),
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             '转写队列空闲中',
-            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            style: TextStyle(color: context.textMain, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             '点击上方卡片选取本地通话录音、采访音频或历史会议录音，自动执行离线声纹分离与转写',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 12.5),
+            style: TextStyle(color: context.textGrey, fontSize: 12.5),
           ),
         ],
       ),
@@ -485,7 +485,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                   gradient: LinearGradient(
                     colors: [
                       AppColors.primary.withValues(alpha: 0.2),
-                      AppColors.surface,
+                      context.surfaceColor,
                     ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
@@ -504,20 +504,20 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                       child: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 20),
                     ),
                     const SizedBox(width: 10),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             '单音频转写',
-                            style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                            style: TextStyle(color: context.textMain, fontSize: 13.5, fontWeight: FontWeight.bold),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
                             'WAV/MP3/M4A等',
-                            style: TextStyle(color: AppColors.textSecondary, fontSize: 10.5),
+                            style: TextStyle(color: context.textSub, fontSize: 10.5),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -537,9 +537,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 decoration: BoxDecoration(
-                  color: AppColors.surface,
+                  color: context.surfaceColor,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.cardBorder),
+                  border: Border.all(color: context.borderColor),
                 ),
                 child: Row(
                   children: [
@@ -552,20 +552,20 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                       child: const Icon(Icons.library_music_rounded, color: AppColors.cyan, size: 20),
                     ),
                     const SizedBox(width: 10),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             '批量队列导入',
-                            style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                            style: TextStyle(color: context.textMain, fontSize: 13.5, fontWeight: FontWeight.bold),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
                             '串行排队防闪退',
-                            style: TextStyle(color: AppColors.textMuted, fontSize: 10.5),
+                            style: TextStyle(color: context.textGrey, fontSize: 10.5),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -594,7 +594,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 gradient: LinearGradient(
                   colors: [
                     AppColors.primary.withValues(alpha: 0.2),
-                    AppColors.surface,
+                    context.surfaceColor,
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -613,18 +613,18 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                     child: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 24),
                   ),
                   const SizedBox(width: 14),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           '单音频极速转写',
-                          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                          style: TextStyle(color: context.textMain, fontSize: 15, fontWeight: FontWeight.bold),
                         ),
-                        SizedBox(height: 3),
+                        const SizedBox(height: 3),
                         Text(
                           '支持 WAV / MP3 / M4A / AAC / FLAC / OGG 等全格式',
-                          style: TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                          style: TextStyle(color: context.textSub, fontSize: 11.5),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -646,9 +646,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
             child: Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: AppColors.surface,
+                color: context.surfaceColor,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.cardBorder),
+                border: Border.all(color: context.borderColor),
               ),
               child: Row(
                 children: [
@@ -661,18 +661,18 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                     child: const Icon(Icons.library_music_rounded, color: AppColors.cyan, size: 24),
                   ),
                   const SizedBox(width: 14),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           '批量队列导入',
-                          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                          style: TextStyle(color: context.textMain, fontSize: 15, fontWeight: FontWeight.bold),
                         ),
-                        SizedBox(height: 3),
+                        const SizedBox(height: 3),
                         Text(
                           '多文件串行调度防内存溢出',
-                          style: TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                          style: TextStyle(color: context.textGrey, fontSize: 11.5),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -727,14 +727,14 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
       child: Container(
         padding: EdgeInsets.all(isCompact ? 12 : 16),
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: context.surfaceColor,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isDone
                 ? AppColors.emerald.withValues(alpha: 0.35)
                 : (isError
                     ? AppColors.rose.withValues(alpha: 0.45)
-                    : (isPaused ? Colors.orangeAccent.withValues(alpha: 0.45) : AppColors.cardBorder)),
+                    : (isPaused ? Colors.orangeAccent.withValues(alpha: 0.45) : context.borderColor)),
           ),
         ),
         child: Column(
@@ -775,7 +775,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                       Text(
                         task.title,
                         style: TextStyle(
-                          color: Colors.white,
+                          color: context.textMain,
                           fontWeight: FontWeight.bold,
                           fontSize: isCompact ? 13.5 : 14.5,
                         ),
@@ -793,7 +793,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                                     : (task.status == TaskStatus.queued
                                         ? '正在等待前置任务完成并自动调度...'
                                         : '正在解码与转写中...'))),
-                        style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                        style: TextStyle(color: context.textGrey, fontSize: 11.5),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -804,7 +804,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     tooltip: '重新转写此纪要',
-                    icon: const Icon(Icons.refresh_rounded, size: 18, color: AppColors.textSecondary),
+                    icon: Icon(Icons.refresh_rounded, size: 18, color: context.textSub),
                     onPressed: () => _confirmRetryTask(task),
                   ),
                   if (!isCompact) ...[
@@ -875,7 +875,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: '移除任务',
-                  icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.textMuted),
+                  icon: Icon(Icons.delete_outline_rounded, size: 18, color: context.textGrey),
                   onPressed: () => _deleteTask(task),
                 ),
               ],
@@ -886,7 +886,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
                   value: progress.progress,
-                  backgroundColor: AppColors.background,
+                  backgroundColor: context.bg,
                   valueColor: AlwaysStoppedAnimation(
                     isError ? AppColors.rose : AppColors.primary,
                   ),
@@ -901,7 +901,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
                     child: Text(
                       progress.stageDescription,
                       style: TextStyle(
-                        color: isError ? AppColors.rose : AppColors.textSecondary,
+                        color: isError ? AppColors.rose : context.textSub,
                         fontSize: 11.5,
                       ),
                       maxLines: 1,

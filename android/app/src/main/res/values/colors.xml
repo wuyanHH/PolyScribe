@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- PolyScribe (声织纪要) 品牌深空底色与自适应图标背景色 -->
+    <color name="ic_launcher_background">#0B0F19</color>
+    <color name="splash_background">#0B0F19</color>
+</resources>

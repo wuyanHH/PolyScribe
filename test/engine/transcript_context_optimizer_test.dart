@@ -31,7 +31,7 @@ void main() {
       expect(res.mergedCount, 1);
       expect(res.segments.first.startMs, 1000);
       expect(res.segments.first.endMs, 6000);
-      expect(res.segments.first.text, '今天我们主要讨论一下关于这个新版本的架构设计方案。');
+      expect(res.segments.first.text, '今天我们主要讨论一下关于这个，新版本的架构设计方案。');
     });
 
     test('不同发言人的连续发言不应被合并', () {
@@ -108,7 +108,7 @@ void main() {
 
       final res = TranscriptContextOptimizer.optimize(segments);
       expect(res.optimizedCount, 1);
-      expect(res.segments.first.text, '然后我们来看具体的实现代码。');
+      expect(res.segments.first.text, '然后，我们来看具体的实现代码。');
     });
 
     test('双向三元组说话人平滑：消除 A-B-A 孤立声学漂移夹心短片并重构连贯段落', () {

@@ -10,6 +10,7 @@ import '../../data/database/app_database.dart';
 import '../../data/models/meeting_task.dart';
 import '../../services/task_queue_service.dart';
 import '../player/sync_player_screen.dart';
+import '../widgets/polyscribe_logo.dart';
 
 /// 纪要与历史记录主界面 (Bento 生产力看板 + FTS5 全文深度检索 + 响应式双列网格/列表自适应)
 class HomeScreen extends StatefulWidget {
@@ -452,15 +453,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final horizontalPad = isCompact ? 12.0 : 20.0;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: context.surfaceColor,
         elevation: 0,
         titleSpacing: isCompact ? 12 : 20,
         title: Row(
           children: [
+            const PolyScribeLogo(size: 28),
+            const SizedBox(width: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [AppColors.primary, AppColors.primaryDark],
@@ -469,14 +472,14 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: const Text(
                 AppConstants.appShortName,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
               ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 '纪要与转写历史',
-                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: context.textMain),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -490,13 +493,13 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: Icon(
                 _useGridOnWide ? Icons.view_agenda_outlined : Icons.grid_view_rounded,
                 size: 20,
-                color: AppColors.textSecondary,
+                color: context.textSub,
               ),
               onPressed: () => setState(() => _useGridOnWide = !_useGridOnWide),
             ),
           IconButton(
             tooltip: '刷新数据',
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
+            icon: Icon(Icons.refresh_rounded, color: context.textSub),
             onPressed: _loadAllTasks,
           ),
           const SizedBox(width: 4),
@@ -589,9 +592,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: context.surfaceColor,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.cardBorder),
+            border: Border.all(color: context.borderColor),
           ),
           child: Row(
             children: [
@@ -727,9 +730,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: context.surfaceColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: context.borderColor),
       ),
       child: Row(
         children: [
@@ -748,7 +751,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
+                  style: TextStyle(color: context.textGrey, fontSize: 11.5),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -756,7 +759,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   value,
                   style: TextStyle(
-                    color: AppColors.textPrimary,
+                    color: context.textMain,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -766,7 +769,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 2),
                 Text(
                   subtext,
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 10.5),
+                  style: TextStyle(color: context.textSub, fontSize: 10.5),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -788,7 +791,7 @@ class _HomeScreenState extends State<HomeScreen> {
           gradient: LinearGradient(
             colors: [
               AppColors.primary.withValues(alpha: 0.22),
-              AppColors.surface,
+              context.surfaceColor,
             ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -841,8 +844,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildSearchBarAndQuickFilters({required bool isCompact, required double horizontalPad}) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
+        color: context.surfaceColor,
+        border: Border(bottom: BorderSide(color: context.borderColor, width: 1)),
       ),
       padding: EdgeInsets.fromLTRB(horizontalPad, 6, horizontalPad, 10),
       child: Row(
@@ -850,12 +853,12 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: TextField(
               controller: _searchController,
-              style: TextStyle(color: AppColors.textPrimary, fontSize: 13),
+              style: TextStyle(color: context.textMain, fontSize: 13),
               decoration: InputDecoration(
                 hintText: isCompact
                     ? '搜索标题、发言人或正文内容...'
                     : '搜索会议标题、发言人或任意段落全文内容 (FTS5)...',
-                hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12.5),
+                hintStyle: TextStyle(color: context.textGrey, fontSize: 12.5),
                 prefixIcon: const Icon(Icons.search_rounded, color: AppColors.primary, size: 19),
                 prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 36),
                 suffixIcon: _searchQuery.isNotEmpty
@@ -869,16 +872,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       )
                     : null,
                 filled: true,
-                fillColor: AppColors.background,
+                fillColor: context.bg,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppColors.cardBorder),
+                  borderSide: BorderSide(color: context.borderColor),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppColors.cardBorder),
+                  borderSide: BorderSide(color: context.borderColor),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
@@ -1272,9 +1275,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: EdgeInsets.all(isCompact ? 12 : 14),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: context.surfaceColor,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.cardBorder),
+            border: Border.all(color: context.borderColor),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1303,7 +1306,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           task.title,
                           style: TextStyle(
-                            color: AppColors.textPrimary,
+                            color: context.textMain,
                             fontWeight: FontWeight.bold,
                             fontSize: isCompact ? 14 : 15,
                           ),
@@ -1313,7 +1316,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 2),
                         Text(
                           '${isLive ? "实时会议" : "外部音频"} · ${_formatCreatedAt(task.createdAt)}',
-                          style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+                          style: TextStyle(color: context.textGrey, fontSize: 11),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1450,13 +1453,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   width: double.infinity,
                   padding: EdgeInsets.symmetric(horizontal: 10, vertical: isCompact ? 6 : 7),
                   decoration: BoxDecoration(
-                    color: AppColors.background,
+                    color: context.bg,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.cardBorder.withValues(alpha: 0.7)),
+                    border: Border.all(color: context.borderColor.withValues(alpha: 0.7)),
                   ),
                   child: Text(
                     snippet,
-                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.35),
+                    style: TextStyle(color: context.textSub, fontSize: 12, height: 1.35),
                     maxLines: isGridCard ? 1 : 2,
                     overflow: TextOverflow.ellipsis,
                   ),

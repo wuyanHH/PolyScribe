@@ -38,8 +38,10 @@ void main() {
       final msItems = senseVoice.getItems(ModelDownloadSource.modelScope);
       final offItems = senseVoice.getItems(ModelDownloadSource.official);
 
-      expect(msItems.any((it) => it.url.contains('modelscope.cn')), true);
-      expect(offItems.any((it) => it.url.contains('github.com')), true);
+      expect(msItems.any((it) => it.url.contains('modelscope.cn') || it.url.contains('hf-mirror.com')), true);
+      expect(offItems.any((it) => it.url.contains('huggingface.co') || it.url.contains('github.com')), true);
+      // 验证官方源均已实现免解压直链，彻底消解移动端与纯 Dart BZip2 假死
+      expect(offItems.every((it) => !it.isArchive), true);
     });
 
     test('ModelDownloadService 单例与版本检查测试', () async {
