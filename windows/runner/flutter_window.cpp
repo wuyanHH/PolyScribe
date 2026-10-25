@@ -55,6 +55,23 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // 必须优先处理原生音频解码完成回调，防止被 Flutter 插件顶层窗口钩子截断导致 MethodChannel 挂死
+  if (message == WM_APP_DECODE_RESULT) {
+    auto* payload = reinterpret_cast<DecodeCallbackPayload*>(lparam);
+    if (payload) {
+      flutter::EncodableMap resp;
+      resp[flutter::EncodableValue("success")] = flutter::EncodableValue(payload->ok);
+      if (!payload->ok) {
+        resp[flutter::EncodableValue("error")] = flutter::EncodableValue(payload->err_msg);
+      }
+      if (payload->result) {
+        payload->result->Success(flutter::EncodableValue(resp));
+      }
+      delete payload;
+    }
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -66,21 +83,6 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
-    case WM_APP_DECODE_RESULT: {
-      auto* payload = reinterpret_cast<DecodeCallbackPayload*>(lparam);
-      if (payload) {
-        flutter::EncodableMap resp;
-        resp[flutter::EncodableValue("success")] = flutter::EncodableValue(payload->ok);
-        if (!payload->ok) {
-          resp[flutter::EncodableValue("error")] = flutter::EncodableValue(payload->err_msg);
-        }
-        if (payload->result) {
-          payload->result->Success(flutter::EncodableValue(resp));
-        }
-        delete payload;
-      }
-      return 0;
-    }
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

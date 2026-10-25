@@ -56,30 +56,31 @@ class AppTheme {
     return ThemeData(
       brightness: Brightness.light,
       primaryColor: AppColors.primary,
-      scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-      canvasColor: const Color(0xFFFFFFFF),
+      scaffoldBackgroundColor: AppColors.lightBackground,
+      canvasColor: AppColors.lightSurface,
       colorScheme: const ColorScheme.light(
         primary: AppColors.primary,
         secondary: AppColors.emerald,
-        surface: Color(0xFFFFFFFF),
-        onSurface: Color(0xFF0F172A),
+        surface: AppColors.lightSurface,
+        onSurface: AppColors.lightTextPrimary,
       ),
       appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFFFFFFFF),
-        foregroundColor: Color(0xFF0F172A),
+        backgroundColor: AppColors.lightSurface,
+        foregroundColor: AppColors.lightTextPrimary,
         elevation: 0,
         scrolledUnderElevation: 0.5,
+        iconTheme: IconThemeData(color: AppColors.lightTextPrimary),
       ),
       cardTheme: CardThemeData(
-        color: const Color(0xFFFFFFFF),
+        color: AppColors.lightSurface,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: Color(0xFFE2E8F0)),
+          side: const BorderSide(color: AppColors.lightCardBorder),
         ),
       ),
       dividerTheme: const DividerThemeData(
-        color: Color(0xFFE2E8F0),
+        color: AppColors.lightCardBorder,
         thickness: 1,
       ),
       snackBarTheme: SnackBarThemeData(
@@ -114,6 +115,7 @@ class AppTheme {
         foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
+        iconTheme: IconThemeData(color: Colors.white),
       ),
       cardTheme: CardThemeData(
         color: AppColors.surface,

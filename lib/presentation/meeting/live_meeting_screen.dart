@@ -96,7 +96,7 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
   Future<void> _checkSystemEnvironment() async {
     final config = await ModelManager.instance.resolveModels();
 
-    if (config.isSenseVoiceReady) {
+    if (config.isCurrentAsrReady || config.isAnyAsrReady) {
       if (mounted) {
         setState(() => _isEngineInitializing = true);
       }
@@ -822,12 +822,13 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
     );
   }
 
-  /// 模型未就绪提示横幅
+  /// 模型未就绪提示横幅 (窄屏内边距自适应)
   Widget _buildModelNoticeBanner() {
+    final isCompact = MediaQuery.of(context).size.width < 600;
     if (_isEngineInitializing) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 20, vertical: 8),
         decoration: BoxDecoration(
           color: AppColors.primary.withValues(alpha: 0.12),
           border: Border(bottom: BorderSide(color: AppColors.primary.withValues(alpha: 0.3))),
@@ -853,10 +854,10 @@ class _LiveMeetingScreenState extends State<LiveMeetingScreen> with TickerProvid
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.amber.withValues(alpha: 0.12),
-        border: const Border(bottom: BorderSide(color: Color(0x33F59E0B))),
+      padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 20, vertical: 8),
+      decoration: const BoxDecoration(
+        color: Color(0x1FF59E0B),
+        border: Border(bottom: BorderSide(color: Color(0x33F59E0B))),
       ),
       child: Row(
         children: [

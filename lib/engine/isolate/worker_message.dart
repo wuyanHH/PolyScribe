@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../data/models/transcript_segment.dart';
 import '../model_manager.dart';
 
 /// 工作线程接收的指令基础类
@@ -99,6 +100,7 @@ class SegmentTranscriptionResponse extends WorkerResponse {
   final int startMs;
   final int endMs;
   final String text;
+  final List<WordTimestamp> words;
   final String language;
   final bool isFinal;
 
@@ -111,6 +113,7 @@ class SegmentTranscriptionResponse extends WorkerResponse {
     required this.startMs,
     required this.endMs,
     required this.text,
+    this.words = const [],
     this.language = 'zh',
     this.isFinal = true,
     super.isSuccess = true,
@@ -126,6 +129,7 @@ class TranscriptSegmentPayload {
   final int startMs;
   final int endMs;
   final String text;
+  final List<WordTimestamp> words;
 
   const TranscriptSegmentPayload({
     required this.taskId,
@@ -134,6 +138,7 @@ class TranscriptSegmentPayload {
     required this.startMs,
     required this.endMs,
     required this.text,
+    this.words = const [],
   });
 }
 

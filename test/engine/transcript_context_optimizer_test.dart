@@ -110,5 +110,51 @@ void main() {
       expect(res.optimizedCount, 1);
       expect(res.segments.first.text, '然后我们来看具体的实现代码。');
     });
+
+    test('双向三元组说话人平滑：消除 A-B-A 孤立声学漂移夹心短片并重构连贯段落', () {
+      // 模拟张总发言过程中，中间仅 1 秒因为声调或轻度漂移被声学模型孤立误切为 SPK_02，前后紧接着都是张总
+      final segments = [
+        const TranscriptSegment(
+          id: 1,
+          taskId: 'task_1',
+          speakerId: 'SPK_01',
+          speakerName: '张总',
+          startMs: 1000,
+          endMs: 3500,
+          text: '关于下个阶段的总体战略布局，',
+        ),
+        const TranscriptSegment(
+          id: 2,
+          taskId: 'task_1',
+          speakerId: 'SPK_02', // 假阳性声学漂移夹心
+          speakerName: '发言人 2',
+          startMs: 4000, // 间隔 500ms
+          endMs: 5200,   // 时长 1.2s <= 2.5s
+          text: '特别关键的是，',
+        ),
+        const TranscriptSegment(
+          id: 3,
+          taskId: 'task_1',
+          speakerId: 'SPK_01',
+          speakerName: '张总',
+          startMs: 5600, // 间隔 400ms
+          endMs: 8500,
+          text: '我们要把端侧模型的性能提升一倍。',
+        ),
+      ];
+
+      final res = TranscriptContextOptimizer.optimize(segments);
+
+      // SPK_02 应当被双向平滑吸收纠正为张总 (SPK_01)
+      expect(res.smoothedSpeakerCount, 1);
+      // 并最终无缝合并为一个连贯长句
+      expect(res.optimizedCount, 1);
+      expect(res.segments.first.speakerId, 'SPK_01');
+      expect(res.segments.first.speakerName, '张总');
+      expect(
+        res.segments.first.text,
+        '关于下个阶段的总体战略布局，特别关键的是，我们要把端侧模型的性能提升一倍。',
+      );
+    });
   });
 }

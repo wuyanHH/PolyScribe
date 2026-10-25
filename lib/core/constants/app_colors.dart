@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
+  /// 当前全局是否为暗色模式（由根组件 MaterialApp / themeMode 同步状态）
+  static bool isDark = true;
+
   // 品牌核心主色
   static const Color primary = Color(0xFFF97316); // 活力珊瑚橙
   static const Color primaryDark = Color(0xFFEA580C);
@@ -20,6 +23,15 @@ class AppColors {
   static const Color amber = Color(0xFFF59E0B);
   static const Color rose = Color(0xFFF43F5E);
   static const Color cyan = Color(0xFF06B6D4);
+
+  // 浅色主题对应规范色彩
+  static const Color lightBackground = Color(0xFFF8FAFC);
+  static const Color lightSurface = Color(0xFFFFFFFF);
+  static const Color lightSurfaceElevated = Color(0xFFF1F5F9);
+  static const Color lightCardBorder = Color(0xFFE2E8F0);
+  static const Color lightTextPrimary = Color(0xFF0F172A);
+  static const Color lightTextSecondary = Color(0xFF475569);
+  static const Color lightTextMuted = Color(0xFF94A3B8);
 
   /// 六大预设角色专属高对比度色彩池
   static const List<SpeakerColor> speakerPalette = [
@@ -98,4 +110,17 @@ class SpeakerColor {
     required this.color,
     required this.surfaceColor,
   });
+}
+
+/// 全局动态色彩上下文感知扩展 (实时响应深浅色主题模式切换)
+extension AppThemeColors on BuildContext {
+  bool get isDark => Theme.of(this).brightness == Brightness.dark;
+
+  Color get bg => isDark ? AppColors.background : AppColors.lightBackground;
+  Color get surfaceColor => isDark ? AppColors.surface : AppColors.lightSurface;
+  Color get surfaceElevatedColor => isDark ? AppColors.surfaceElevated : AppColors.lightSurfaceElevated;
+  Color get borderColor => isDark ? AppColors.cardBorder : AppColors.lightCardBorder;
+  Color get textMain => isDark ? AppColors.textPrimary : AppColors.lightTextPrimary;
+  Color get textSub => isDark ? AppColors.textSecondary : AppColors.lightTextSecondary;
+  Color get textGrey => isDark ? AppColors.textMuted : AppColors.lightTextMuted;
 }

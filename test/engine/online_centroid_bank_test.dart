@@ -139,5 +139,35 @@ void main() {
       // SPK_02 应成功被重定向收敛归并至 SPK_01
       expect(mergeMap['SPK_02'], 'SPK_01');
     });
+
+    test('语义反哺声纹分离：承接连词与语义延伸在声学漂移时保全同一说话人', () {
+      final bank = OnlineCentroidBank(similarityThreshold: 0.55);
+
+      // SPK_01 初始发言
+      final v1 = Float32List.fromList([1.0, 0.0, 0.0, 0.0]);
+      final res1 = bank.assignSpeaker(
+        embedding: v1,
+        durationMs: 2500,
+        startMs: 0,
+        endMs: 2500,
+        spokenText: '我们今天讨论的核心是架构重构方案',
+      );
+      expect(res1.speakerId, 'SPK_01');
+
+      // 间隔 1.5 秒后，发言人站起走动，声调发生偏离，声学余弦相似度仅为 0.48 (低于 0.55 阈值)
+      // 若纯靠声学分离，必然被误切为 SPK_02；但该句以 "而且" 强承接连词开头，触发语义反哺！
+      final driftVec = Float32List.fromList([0.48, 0.87, 0.0, 0.0]);
+      final res2 = bank.assignSpeaker(
+        embedding: driftVec,
+        durationMs: 2000,
+        startMs: 4000, // 间隔 1500ms
+        endMs: 6000,
+        spokenText: '而且关于性能指标我们也做了测试',
+      );
+
+      // 语义反哺成功保全 SPK_01，消除了误切！
+      expect(res2.speakerId, 'SPK_01');
+      expect(res2.isNewSpeaker, false);
+    });
   });
 }

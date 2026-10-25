@@ -294,6 +294,52 @@ void _extractAndAlignArchive(Map<String, dynamic> params) {
           ..createSync(recursive: true)
           ..writeAsBytesSync(fileContent);
       }
+    } else if (modelId == PredefinedModels.paraformerZh.id) {
+      if (filename.endsWith('model.int8.onnx') || filename.endsWith('model.onnx')) {
+        File(p.join(targetDirPath, 'paraformer_model.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.endsWith('tokens.txt')) {
+        File(p.join(targetDirPath, 'paraformer_tokens.txt'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      }
+    } else if (modelId == PredefinedModels.qwen3Asr.id) {
+      if (filename.contains('conv_frontend') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'qwen3_conv_frontend.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.contains('encoder') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'qwen3_encoder.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.contains('decoder') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'qwen3_decoder.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.endsWith('tokenizer.json') || filename.endsWith('tokens.txt')) {
+        File(p.join(targetDirPath, 'qwen3_tokenizer.json'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      }
+    } else if (modelId == PredefinedModels.parakeetTdt.id) {
+      if (filename.contains('encoder') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'parakeet_encoder.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.contains('decoder') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'parakeet_decoder.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.contains('joiner') && filename.endsWith('.onnx')) {
+        File(p.join(targetDirPath, 'parakeet_joiner.int8.onnx'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      } else if (filename.endsWith('tokens.txt')) {
+        File(p.join(targetDirPath, 'parakeet_tokens.txt'))
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(fileContent);
+      }
     } else if (modelId == PredefinedModels.pyannote.id) {
       if (filename.endsWith('.onnx')) {
         File(p.join(targetDirPath, 'pyannote_segmentation.onnx'))

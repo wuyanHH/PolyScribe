@@ -93,7 +93,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         body: Row(
           children: [
             _buildDesktopSidebar(isWideDesktop, isServerRunning),
-            const VerticalDivider(width: 1, thickness: 1, color: AppColors.cardBorder),
+            VerticalDivider(width: 1, thickness: 1, color: AppColors.cardBorder),
             Expanded(
               child: IndexedStack(
                 index: _currentIndex,
@@ -112,7 +112,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         children: _cachedPages,
       ),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           border: Border(top: BorderSide(color: AppColors.cardBorder, width: 1)),
         ),
         child: NavigationBarTheme(
@@ -124,13 +124,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               if (states.contains(WidgetState.selected)) {
                 return const IconThemeData(color: AppColors.primary, size: 22);
               }
-              return const IconThemeData(color: AppColors.textMuted, size: 21);
+              return IconThemeData(color: AppColors.textMuted, size: 21);
             }),
             labelTextStyle: WidgetStateProperty.resolveWith((states) {
               if (states.contains(WidgetState.selected)) {
                 return const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold);
               }
-              return const TextStyle(color: AppColors.textSecondary, fontSize: 11);
+              return TextStyle(color: AppColors.textSecondary, fontSize: 11);
             }),
           ),
           child: NavigationBar(
@@ -238,7 +238,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   ),
                   if (isExtended) ...[
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -247,17 +247,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                               Text(
                                 AppConstants.appFullName,
                                 style: TextStyle(
-                                  color: Colors.white,
+                                  color: AppColors.textPrimary,
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 0.4,
                                 ),
                               ),
-                              SizedBox(width: 6),
-                              _ProBadge(),
+                              const SizedBox(width: 6),
+                              const _ProBadge(),
                             ],
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
                             AppConstants.appEnglishName,
                             style: TextStyle(
@@ -273,7 +273,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ],
               ),
             ),
-            const Divider(height: 1, color: AppColors.cardBorder),
+            Divider(height: 1, color: AppColors.cardBorder),
             const SizedBox(height: 12),
 
             // 导航菜单列表
@@ -330,7 +330,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                                           Text(
                                             item.label,
                                             style: TextStyle(
-                                              color: isSelected ? Colors.white : AppColors.textPrimary,
+                                              color: isSelected ? AppColors.primary : AppColors.textPrimary,
                                               fontSize: 13.5,
                                               fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                                             ),

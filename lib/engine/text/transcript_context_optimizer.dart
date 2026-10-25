@@ -1,4 +1,5 @@
 import '../../data/models/transcript_segment.dart';
+import 'transcript_cleaner.dart';
 
 /// 上下文整合优化结果汇总
 class ContextOptimizeResult {
@@ -6,12 +7,14 @@ class ContextOptimizeResult {
   final int originalCount;
   final int optimizedCount;
   final int mergedCount;
+  final int smoothedSpeakerCount;
 
   const ContextOptimizeResult({
     required this.segments,
     required this.originalCount,
     required this.optimizedCount,
     required this.mergedCount,
+    this.smoothedSpeakerCount = 0,
   });
 }
 
@@ -64,14 +67,69 @@ class TranscriptContextOptimizer {
     '包括',
   ];
 
-  /// 对段落列表执行智能上下文整合与断句归并
+  /// 常见对话换人与交接提示短语 (表明正在向他人提问或交接话语权，不予平滑)
+  static final List<RegExp> _turnTakingPatterns = [
+    RegExp(r'(你|您)觉得呢'),
+    RegExp(r'(你|您)怎么看'),
+    RegExp(r'我想补充一点'),
+    RegExp(r'我不同意'),
+  ];
+
+  /// 双向三元组说话人平滑过滤 (Tri-gram Speaker Smoothing)
+  ///
+  /// 消除经典的 A -> B -> A 假阳性声学漂移夹心短片：
+  /// 当发言人 A 正在说话，中间仅 1~2 秒由于身体移动或声调起伏被声学模型误判为 B，
+  /// 但紧接着又继续是 A，且中间段时间短、间隔紧凑、语义无转折冲突时，
+  /// 自动将 B 纠正归属于 A，消解碎片化打断与时间错位。
+  static List<TranscriptSegment> smoothTrigramSpeakerDrift(List<TranscriptSegment> list) {
+    if (list.length < 3) return List.of(list);
+
+    final result = List<TranscriptSegment>.of(list);
+
+    for (int i = 1; i < result.length - 1; i++) {
+      final prev = result[i - 1];
+      final curr = result[i];
+      final next = result[i + 1];
+
+      // 前后必须是同一个说话人，且中间段不同
+      if (prev.speakerId == next.speakerId && curr.speakerId != prev.speakerId) {
+        final durationMs = curr.endMs - curr.startMs;
+        final gapBefore = curr.startMs - prev.endMs;
+        final gapAfter = next.startMs - curr.endMs;
+
+        // 紧凑性检查：前后停顿均在 2.0 秒以内，且中间段短于 2.5 秒 (或字数 <= 12)
+        final isShortDuration = durationMs <= 2500 || curr.text.trim().length <= 12;
+        final isCompactGap = gapBefore <= 2000 && gapAfter <= 2000;
+
+        if (isShortDuration && isCompactGap) {
+          // 语义冲突保护：若中间段明显是对话反驳或换人交接，不予平滑
+          final text = curr.text.trim();
+          final hasTurnTaking = _turnTakingPatterns.any((p) => p.hasMatch(text));
+
+          if (!hasTurnTaking) {
+            // 执行双向说话人归属修正
+            result[i] = curr.copyWith(
+              speakerId: prev.speakerId,
+              speakerName: prev.speakerName,
+            );
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /// 对段落列表执行智能上下文整合与断句归并 (融合双向三元组平滑与连贯断句重构)
   ///
   /// [maxMergeGapMs]: 同一发言人允许合并的最大发音间隔，默认 1500 毫秒 (1.5秒)
   /// [forceMergeShortFragments]: 当片段极短 (<=4 个字符) 时，允许更宽松的间隔 (最大 2500 毫秒)
+  /// [enableSpeakerSmoothing]: 是否启用双向三元组说话人平滑，默认 true
   static ContextOptimizeResult optimize(
     List<TranscriptSegment> source, {
     int maxMergeGapMs = 1500,
     bool forceMergeShortFragments = true,
+    bool enableSpeakerSmoothing = true,
   }) {
     if (source.length <= 1) {
       return ContextOptimizeResult(
@@ -79,16 +137,31 @@ class TranscriptContextOptimizer {
         originalCount: source.length,
         optimizedCount: source.length,
         mergedCount: 0,
+        smoothedSpeakerCount: 0,
       );
     }
 
+    // 阶段一：双向三元组说话人平滑修正 (消解 A-B-A 孤立夹心短片)
+    int smoothedCounter = 0;
+    List<TranscriptSegment> workingList = source;
+    if (enableSpeakerSmoothing && source.length >= 3) {
+      final smoothed = smoothTrigramSpeakerDrift(source);
+      for (int i = 0; i < source.length; i++) {
+        if (source[i].speakerId != smoothed[i].speakerId) {
+          smoothedCounter++;
+        }
+      }
+      workingList = smoothed;
+    }
+
+    // 阶段二：智能上下文与连贯断句归并
     final List<TranscriptSegment> result = [];
     int mergedCounter = 0;
 
-    TranscriptSegment current = source.first;
+    TranscriptSegment current = workingList.first;
 
-    for (int i = 1; i < source.length; i++) {
-      final next = source[i];
+    for (int i = 1; i < workingList.length; i++) {
+      final next = workingList[i];
 
       if (_shouldMerge(current, next, maxMergeGapMs, forceMergeShortFragments)) {
         // 执行合并
@@ -106,6 +179,7 @@ class TranscriptContextOptimizer {
       originalCount: source.length,
       optimizedCount: result.length,
       mergedCount: mergedCounter,
+      smoothedSpeakerCount: smoothedCounter,
     );
   }
 
@@ -162,40 +236,9 @@ class TranscriptContextOptimizer {
     return false;
   }
 
-  /// 合并两条段落并智能重构标点与时间区间
+  /// 合并两条段落并智能重构标点与时间区间 (基于 TranscriptCleaner 消除首尾重叠与平滑拼接)
   static TranscriptSegment _mergeTwoSegments(TranscriptSegment a, TranscriptSegment b) {
-    final textA = a.text.trim();
-    final textB = b.text.trim();
-
-    String mergedText = textA;
-    if (textA.isNotEmpty && textB.isNotEmpty) {
-      final lastCharA = textA.substring(textA.length - 1);
-      final firstCharB = textB.substring(0, 1);
-
-      final hasEndingA = _terminatingPunctuation.contains(lastCharA) ||
-          _continuationPunctuation.contains(lastCharA);
-
-      // 若两端均为英文字母或数字，需补空格
-      final isAsciiA = RegExp(r'[a-zA-Z0-9]').hasMatch(lastCharA);
-      final isAsciiB = RegExp(r'[a-zA-Z0-9]').hasMatch(firstCharB);
-
-      if (!hasEndingA) {
-        if (isAsciiA && isAsciiB) {
-          mergedText = '$textA $textB';
-        } else {
-          // 中文在语流未完结时，如后文非连词且前文有一定长度，可平滑连接
-          mergedText = '$textA$textB';
-        }
-      } else {
-        if (isAsciiA && isAsciiB) {
-          mergedText = '$textA $textB';
-        } else {
-          mergedText = '$textA$textB';
-        }
-      }
-    } else {
-      mergedText = '$textA$textB';
-    }
+    final mergedText = TranscriptCleaner.mergeWithContext(a.text, b.text);
 
     // 合并字词级时间戳 (如果有)
     final List<WordTimestamp> mergedWords = [...a.words, ...b.words];

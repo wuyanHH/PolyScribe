@@ -34,6 +34,7 @@ class NativeAudioBridge {
     required String inputPath,
     required String outputPath,
     int targetSampleRate = 16000,
+    Duration timeout = const Duration(seconds: 60),
   }) async {
     if (kIsWeb) return false;
     try {
@@ -41,7 +42,13 @@ class NativeAudioBridge {
         'inputPath': inputPath,
         'outputPath': outputPath,
         'sampleRate': targetSampleRate,
-      });
+      }).timeout(
+        timeout,
+        onTimeout: () {
+          debugPrint('[NativeAudioBridge] 原生音频解码超时 (${timeout.inSeconds}s)，熔断降级');
+          return {'success': false, 'error': 'decode timeout'};
+        },
+      );
       if (res is Map) {
         return res['success'] == true;
       }

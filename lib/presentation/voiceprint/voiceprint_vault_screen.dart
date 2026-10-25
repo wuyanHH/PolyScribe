@@ -507,14 +507,37 @@ class _VoiceprintVaultScreenState extends State<VoiceprintVaultScreen> {
               },
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
+          // 滑动条刻度说明 (自适应等宽分布与左中右对齐，杜绝大字体溢出)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('宽松远场 (0.50)', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
-                Text('黄金平衡 (0.65)', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                Text('严苛防串音 (0.85)', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+              children: const [
+                Expanded(
+                  child: Text(
+                    '宽松远场 (0.50)',
+                    style: TextStyle(fontSize: 10.5, color: AppColors.textMuted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    '黄金平衡 (0.65)',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 10.5, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    '严苛防串音 (0.85)',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 10.5, color: AppColors.textMuted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
           ),

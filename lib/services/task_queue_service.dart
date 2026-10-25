@@ -15,6 +15,7 @@ import '../engine/isolate/inference_worker.dart';
 import '../engine/isolate/worker_message.dart';
 import '../engine/model_manager.dart';
 import '../engine/text/transcript_context_optimizer.dart';
+import 'app_storage_service.dart';
 
 /// 任务处理进度事件
 class TaskProgressEvent {
@@ -87,11 +88,7 @@ class TaskQueueService {
     try {
       final sourceFile = File(filePath);
       if (sourceFile.existsSync()) {
-        final appSupport = await getApplicationSupportDirectory();
-        final audioDir = Directory(p.join(appSupport.path, 'imported_audios'));
-        if (!audioDir.existsSync()) {
-          audioDir.createSync(recursive: true);
-        }
+        final audioDir = await AppStorageService.instance.getAudiosDirectory();
         final ext = p.extension(filePath);
         final safeName = p.basenameWithoutExtension(filePath).replaceAll(RegExp(r'[^\w\u4e00-\u9fa5\-_]'), '_');
         final destPath = p.join(audioDir.path, '${taskId}_$safeName$ext');
@@ -285,7 +282,7 @@ class TaskQueueService {
       }
 
       final modelConfig = await ModelManager.instance.resolveModels();
-      if (!modelConfig.isSenseVoiceReady) return;
+      if (!modelConfig.isCurrentAsrReady && !modelConfig.isAnyAsrReady) return;
 
       final allTasks = await AppDatabase.instance.getAllTasks();
       for (final task in allTasks) {
@@ -405,27 +402,34 @@ class TaskQueueService {
 
     // 真实环境：先校验离线模型是否就绪，避免无模型时白白耗费解码算力与内存
     final modelConfig = await ModelManager.instance.resolveModels();
-    if (!modelConfig.isSenseVoiceReady) {
-      throw Exception('SenseVoice 语音识别模型未就绪，请前往模型管理中心下载模型后重试');
+    if (!modelConfig.isCurrentAsrReady && !modelConfig.isAnyAsrReady) {
+      throw Exception('语音识别模型未就绪 (${modelConfig.currentAsrName})，请前往模型管理中心下载模型后重试');
     }
 
-    // 全格式流式解码音频为 16kHz 单声道标准 WAV (带动态耗时与平滑进度反馈，告别 10% 假死状态)
+    // 全格式流式解码音频为 16kHz 单声道标准 WAV (带动态耗时与平滑进度反馈，告别 10% / 22% 假死状态)
     int decodeTicks = 0;
     final decodeTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
       decodeTicks++;
       final p = (0.05 + (decodeTicks * 0.012)).clamp(0.05, 0.22);
       final elapsedSec = (decodeTicks * 0.7).toStringAsFixed(1);
+      final tip = decodeTicks > 15
+          ? '正在深度流式解码与重采样音频 (音频较长，已耗时 ${elapsedSec}s)...'
+          : '正在流式解码与重采样音频 (已耗时 ${elapsedSec}s)...';
       _progressController.add(TaskProgressEvent(
         taskId: task.id,
         progress: p,
-        stageDescription: '正在流式解码与重采样音频 (已耗时 ${elapsedSec}s)...',
+        stageDescription: tip,
         status: TaskStatus.processing,
       ));
     });
 
     DecodedAudioResult decoded;
     try {
-      decoded = await _decodeAudioFileTo16k(task.audioPath);
+      // 引入 90 秒解码全局看门狗，彻底终结任何原生解码/FFmpeg/格式解析死锁卡在 22% 的顽疾
+      decoded = await _decodeAudioFileTo16k(task.audioPath).timeout(
+        const Duration(seconds: 90),
+        onTimeout: () => throw TimeoutException('音频流式解码超时 (90s)，文件可能格式损坏或通道无响应'),
+      );
     } finally {
       decodeTimer.cancel();
     }
@@ -434,12 +438,18 @@ class TaskQueueService {
       '[TaskQueueService] 音频解码完成: 时长=${decoded.durationMs}ms, 标准WAV=${decoded.standardWavPath}, 声道=${decoded.channelAnalysis.description}',
     );
 
+    _progressController.add(TaskProgressEvent(
+      taskId: task.id,
+      progress: 0.225,
+      stageDescription: '正在校验并固化高精度时间戳对齐音频...',
+      status: TaskStatus.processing,
+    ));
+
     // 将标准化 16kHz WAV 保留为高精度对齐音频源 (彻底解决压缩音频 Seek 漂移和音频文字错位)
     MeetingTask currentTask = task;
     if (decoded.standardWavPath.isNotEmpty && File(decoded.standardWavPath).existsSync()) {
       try {
-        final appSupport = await getApplicationSupportDirectory();
-        final audioDir = Directory(p.join(appSupport.path, 'imported_audios'));
+        final audioDir = await AppStorageService.instance.getAudiosDirectory();
         final permanentAlignedWav = p.join(audioDir.path, '${task.id}_aligned_16k.wav');
         if (decoded.standardWavPath != permanentAlignedWav) {
           final sourceStd = File(decoded.standardWavPath);
@@ -528,19 +538,21 @@ class TaskQueueService {
         while (offset + 8 <= header.length) {
           final chunkId = String.fromCharCodes(header.sublist(offset, offset + 4));
           final chunkSize = bd.getUint32(offset + 4, Endian.little);
-          offset += 8;
-          if (chunkId == 'fmt ' && offset + 16 <= header.length) {
-            audioFormat = bd.getUint16(offset, Endian.little);
-            numChannels = bd.getUint16(offset + 2, Endian.little);
-            sampleRate = bd.getUint32(offset + 4, Endian.little);
-            bitsPerSample = bd.getUint16(offset + 14, Endian.little);
+          final chunkDataStart = offset + 8;
+          if (chunkId == 'fmt ' && chunkDataStart + 16 <= header.length) {
+            audioFormat = bd.getUint16(chunkDataStart, Endian.little);
+            numChannels = bd.getUint16(chunkDataStart + 2, Endian.little);
+            sampleRate = bd.getUint32(chunkDataStart + 4, Endian.little);
+            bitsPerSample = bd.getUint16(chunkDataStart + 14, Endian.little);
           } else if (chunkId == 'data') {
-            dataBytes = chunkSize > 0 && (offset + chunkSize <= len)
+            dataBytes = chunkSize > 0 && (chunkDataStart + chunkSize <= len)
                 ? chunkSize
-                : (len - offset);
+                : (len - chunkDataStart);
             break;
           }
-          offset += chunkSize + (chunkSize.isOdd ? 1 : 0);
+          final paddedSize = (chunkSize + 1) & ~1;
+          if (paddedSize < 0 || chunkDataStart + paddedSize <= offset) break;
+          offset = chunkDataStart + paddedSize;
         }
 
         if (audioFormat == 1 &&
@@ -558,7 +570,7 @@ class TaskQueueService {
     return null;
   }
 
-  int minHeaderSize(int fileLen) => fileLen < 512 ? fileLen : 512;
+  int minHeaderSize(int fileLen) => fileLen < 4096 ? fileLen : 4096;
 
   /// 全格式音频解码器：支持 WAV (全位深/浮点/多声道) 及 M4A/MP3/AAC/FLAC/OGG/OPUS/AMR 等全部外部音频
   /// 采用磁盘流式直写架构，主 Isolate 不驻留整段音频的 Float32List，彻底根治手机端长音频 OOM 闪退
@@ -674,6 +686,7 @@ class TaskQueueService {
         inputPath: inputPath,
         outputPath: outWavPath,
         targetSampleRate: 16000,
+        timeout: const Duration(seconds: 45),
       );
       if (nativeOk && File(outWavPath).existsSync() && File(outWavPath).lengthSync() > 44) {
         debugPrint('[TaskQueueService] 原生硬件引擎音频解码成功: $outWavPath');
@@ -693,7 +706,10 @@ class TaskQueueService {
           '-c:a',
           'pcm_s16le',
           outWavPath,
-        ]);
+        ]).timeout(
+          const Duration(seconds: 45),
+          onTimeout: () => throw TimeoutException('FFmpeg 转码超时 (45s)'),
+        );
         if (result.exitCode == 0 && File(outWavPath).existsSync() && File(outWavPath).lengthSync() > 44) {
           debugPrint('[TaskQueueService] FFmpeg 音频转码成功: $outWavPath');
           return outWavPath;
@@ -824,6 +840,7 @@ class TaskQueueService {
           startMs: event.startMs,
           endMs: event.endMs,
           text: event.text,
+          words: event.words,
         );
         try {
           await AppDatabase.instance.insertSegment(seg);
@@ -855,6 +872,7 @@ class TaskQueueService {
                 startMs: p.startMs,
                 endMs: p.endMs,
                 text: p.text,
+                words: p.words,
               ))
           .toList();
 

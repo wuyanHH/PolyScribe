@@ -219,6 +219,8 @@ class MainActivity : FlutterActivity() {
         val bufferInfo = MediaCodec.BufferInfo()
         var isInputEOS = false
         var isOutputEOS = false
+        var emptyPollCount = 0
+        val decodeStartTime = System.currentTimeMillis()
 
         RandomAccessFile(outFile, "rw").use { raf ->
             raf.setLength(0)
@@ -301,6 +303,23 @@ class MainActivity : FlutterActivity() {
                     }
 
                     val outIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+                    if (outIndex < 0) {
+                        if (isInputEOS) {
+                            emptyPollCount++
+                            if (emptyPollCount > 50) {
+                                // 输入已结束且解码器连续 50 次未产生新数据帧，判定解码已结束退出循环，杜绝芯片死循环
+                                isOutputEOS = true
+                            }
+                        }
+                    } else {
+                        emptyPollCount = 0
+                    }
+
+                    // 全局防假死看门狗：单个音频文件最长解码 180 秒
+                    if (System.currentTimeMillis() - decodeStartTime > 180_000L) {
+                        isOutputEOS = true
+                    }
+
                     when {
                         outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             val newFormat = codec.outputFormat

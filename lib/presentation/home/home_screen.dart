@@ -187,14 +187,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.white24,
+                  color: AppColors.textMuted.withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
               const SizedBox(height: 16),
-              const Text(
+              Text(
                 '导入外部录音文件',
-                style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                style: TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6),
               const Text(
@@ -213,7 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: const Icon(Icons.audio_file_rounded, color: AppColors.primary),
                 ),
-                title: const Text('单音频快速转写', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text('单音频快速转写', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
                 subtitle: const Text('选取单个音频文件，立即启动后台离线转写', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
                 trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
                 onTap: () {
@@ -233,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: const Icon(Icons.queue_music_rounded, color: AppColors.cyan),
                 ),
-                title: const Text('批量导入音频', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text('批量导入音频', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
                 subtitle: const Text('一次性选取多个录音，自动排队串行转写防卡顿', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
                 trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
                 onTap: () {
@@ -473,10 +473,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            const Expanded(
+            Expanded(
               child: Text(
                 '纪要与转写历史',
-                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: Colors.white),
+                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -755,8 +755,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 2),
                 Text(
                   value,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -807,21 +807,21 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Icon(Icons.mic_rounded, color: Colors.white, size: 22),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     '实时会议工作台',
                     style: TextStyle(color: AppColors.primary, fontSize: 11.5, fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 2),
+                  const SizedBox(height: 2),
                   Text(
                     '开启现场转录',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 2),
-                  Text(
+                  const SizedBox(height: 2),
+                  const Text(
                     '支持麦克风+系统内录',
                     style: TextStyle(color: AppColors.textSecondary, fontSize: 10.5),
                     maxLines: 1,
@@ -840,7 +840,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 搜索框及分类筛选栏
   Widget _buildSearchBarAndQuickFilters({required bool isCompact, required double horizontalPad}) {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
       ),
@@ -850,7 +850,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: TextField(
               controller: _searchController,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 13),
               decoration: InputDecoration(
                 hintText: isCompact
                     ? '搜索标题、发言人或正文内容...'
@@ -1091,7 +1091,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
             Text(
               hasActiveFilterOrSearch ? '没有找到符合条件的纪要记录' : '暂无符合条件的纪要记录',
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1303,7 +1303,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           task.title,
                           style: TextStyle(
-                            color: Colors.white,
+                            color: AppColors.textPrimary,
                             fontWeight: FontWeight.bold,
                             fontSize: isCompact ? 14 : 15,
                           ),

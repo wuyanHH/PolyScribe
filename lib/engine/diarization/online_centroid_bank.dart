@@ -68,26 +68,82 @@ class OnlineCentroidBank {
     _knownVoicePrints.addAll(prints);
   }
 
-  /// 分配或匹配声纹向量
+  /// 常见语义连续/承接特征 (表明该句极大可能是前一句的语义延伸，而非换人发言)
+  static final List<String> continuationPrefixes = [
+    '而且', '并且', '然后', '但是', '不过', '因而', '所以', '那么',
+    '另外', '此外', '其实', '也就是说', '就是说', '对吧', '以及', '包括',
+    '接着', '还有', '因此', '哪怕', '虽然',
+  ];
+
+  /// 常见极短语义肯定/应答词
+  static final Set<String> shortAffirmations = {
+    '对', '对对', '对对对', '好', '好的', '是的', '没错', '嗯', '嗯嗯',
+    '确实', '明白', 'OK', '行',
+  };
+
+  /// 常见对话换人提示短语 (表明正在向他人提问或交接话语权)
+  static final List<RegExp> turnTakingPatterns = [
+    RegExp(r'(你|您)觉得呢'),
+    RegExp(r'(你|您)怎么看'),
+    RegExp(r'我想补充一点'),
+    RegExp(r'我不同意'),
+  ];
+
+  /// 分配或匹配声纹向量 (融合语义连贯度反哺，彻底消解声学轻微漂移造成的误切角色)
   ///
   /// [embedding]: 当前音频切片的声纹向量 (192或512维)
   /// [durationMs]: 切片时长 (毫秒)
   /// [startMs]: 切片起始时间
   /// [endMs]: 切片结束时间
+  /// [spokenText]: 当前切片对应的转写文本内容 (用于语义反哺声纹分离)
   CentroidMatchResult assignSpeaker({
     required Float32List embedding,
     required int durationMs,
     required int startMs,
     required int endMs,
+    String? spokenText,
   }) {
     final normEmb = normalizeL2(embedding);
     final gap = startMs - _lastSpeechEndMs;
+    final text = spokenText?.trim() ?? '';
 
-    // 1. 连续发言时序平滑与短语音漂移抑制 (自然呼吸间隔 2.5 秒以内且时长较短时平滑继承)
+    // 语义连续性特征检测
+    final hasContinuationPrefix = continuationPrefixes.any((p) => text.startsWith(p));
+    final isShortAffirmation = shortAffirmations.contains(text);
+    final isSemanticContinuation = hasContinuationPrefix || isShortAffirmation;
+    final isTurnTaking = turnTakingPatterns.any((p) => p.hasMatch(text));
+
+    // 1. 语义驱动的强连续性平滑 (若前后间隔在 3.5 秒内且后句是承接连词/极短应答，优先继承上一发言人)
+    if (_lastSpeakerId != null &&
+        gap >= 0 &&
+        gap <= 3500 &&
+        isSemanticContinuation &&
+        !isTurnTaking) {
+      final lastCentroid = _centroids[_lastSpeakerId];
+      if (lastCentroid != null) {
+        final lastSim = _cosineSimilarity(normEmb, lastCentroid);
+        // 只要声学相似度不低于 0.45 (允许声调起伏或离麦克风距离变化)，依靠语义连续性直接锁定上一角色
+        if (lastSim >= 0.45) {
+          _lastSpeechEndMs = endMs;
+          if (durationMs >= AppConstants.minValidSpeechMs) {
+            _updateCentroid(_lastSpeakerId!, normEmb);
+          }
+          return CentroidMatchResult(
+            speakerId: _lastSpeakerId!,
+            speakerName: _speakerNames[_lastSpeakerId!],
+            similarity: lastSim,
+            isNewSpeaker: false,
+          );
+        }
+      }
+    }
+
+    // 2. 连续发言时序平滑与短语音漂移抑制 (自然呼吸间隔 2.5 秒以内且时长较短时平滑继承)
     if (_lastSpeakerId != null &&
         gap >= 0 &&
         gap <= AppConstants.maxSpeakerShiftGapMs &&
-        durationMs < AppConstants.minValidSpeechMs) {
+        durationMs < AppConstants.minValidSpeechMs &&
+        !isTurnTaking) {
       _lastSpeechEndMs = endMs;
       return CentroidMatchResult(
         speakerId: _lastSpeakerId!,
@@ -97,7 +153,7 @@ class OnlineCentroidBank {
       );
     }
 
-    // 2. 比对实名声纹库
+    // 3. 比对实名声纹库
     double maxKnownSim = -1.0;
     VoicePrint? matchedKnown;
     for (final known in _knownVoicePrints) {
@@ -108,12 +164,16 @@ class OnlineCentroidBank {
       }
     }
 
-    // 3. 比对当前会议已存在的质心池
+    // 4. 比对当前会议已存在的质心池 (融入语义加成)
     String? bestSpeakerId;
     double maxCentroidSim = -1.0;
 
     for (final entry in _centroids.entries) {
-      final sim = _cosineSimilarity(normEmb, entry.value);
+      double sim = _cosineSimilarity(normEmb, entry.value);
+      // 若该候选人就是上一发言人且当前句具有语义承接，给予 +0.08 的语义连贯加成
+      if (entry.key == _lastSpeakerId && isSemanticContinuation && !isTurnTaking && gap <= 3000) {
+        sim = (sim + 0.08).clamp(0.0, 1.0);
+      }
       if (sim > maxCentroidSim) {
         maxCentroidSim = sim;
         bestSpeakerId = entry.key;

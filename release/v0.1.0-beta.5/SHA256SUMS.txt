@@ -1,0 +1,2 @@
+f067d2d736f297abd69cbb0b129bb703b5af8afb68fbc4c7fcea5978750358d6  PolyScribe-v0.1.0-beta.5-android-arm64-v8a.apk
+fc0f7f50b8952c869e0dd45ee90a9b4a38440ca3f481bdfc9adf186289849b87  PolyScribe-v0.1.0-beta.5-windows-x64.zip

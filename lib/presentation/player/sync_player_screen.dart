@@ -858,7 +858,7 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
           ),
         ),
         actions: [
-          // 跟读吸附快捷开关
+          // 跟读吸附快捷开关 (高频交互，双端常驻)
           if (isAudioAvailable)
             IconButton(
               tooltip: _autoScrollEnabled ? '跟读吸附已开启 (点击暂停吸附，自由翻阅)' : '跟读吸附已暂停 (点击恢复自动跟随)',
@@ -879,32 +879,35 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 }
               },
             ),
-          // 会话流聚合 / 逐句卡片 视图切换
-          IconButton(
-            tooltip: _isGroupedView ? '当前为：会话流聚合模式 (高密度，点击切换逐句卡片)' : '当前为：逐句卡片模式 (点击切换会话流聚合)',
-            icon: Icon(
-              _isGroupedView ? Icons.chat_bubble_outline_rounded : Icons.view_stream_rounded,
-              size: 20,
-              color: _isGroupedView ? AppColors.primary : AppColors.textMuted,
+          // 桌面端宽屏专属：快捷动作平铺展开展示
+          if (isWideDesktop) ...[
+            // 会话流聚合 / 逐句卡片 视图切换
+            IconButton(
+              tooltip: _isGroupedView ? '当前为：会话流聚合模式 (高密度，点击切换逐句卡片)' : '当前为：逐句卡片模式 (点击切换会话流聚合)',
+              icon: Icon(
+                _isGroupedView ? Icons.chat_bubble_outline_rounded : Icons.view_stream_rounded,
+                size: 20,
+                color: _isGroupedView ? AppColors.primary : AppColors.textMuted,
+              ),
+              onPressed: () {
+                setState(() {
+                  _isGroupedView = !_isGroupedView;
+                });
+              },
             ),
-            onPressed: () {
-              setState(() {
-                _isGroupedView = !_isGroupedView;
-              });
-            },
-          ),
-          // 智能整合上下文与断句快捷按钮
-          IconButton(
-            tooltip: '智能整合上下文与断句 (合并同一发言人碎片短句)',
-            icon: const Icon(Icons.auto_fix_high_rounded, color: AppColors.primary, size: 20),
-            onPressed: _optimizeContextAndMerge,
-          ),
-          TextButton.icon(
-            style: TextButton.styleFrom(foregroundColor: AppColors.primary),
-            icon: const Icon(Icons.ios_share_rounded, size: 18),
-            label: const Text('导出', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            onPressed: _showExportDialog,
-          ),
+            // 智能整合上下文与断句快捷按钮
+            IconButton(
+              tooltip: '智能整合上下文与断句 (合并同一发言人碎片短句)',
+              icon: const Icon(Icons.auto_fix_high_rounded, color: AppColors.primary, size: 20),
+              onPressed: _optimizeContextAndMerge,
+            ),
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+              icon: const Icon(Icons.ios_share_rounded, size: 18),
+              label: const Text('导出', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+              onPressed: _showExportDialog,
+            ),
+          ],
           IconButton(
             tooltip: _isSearching ? '收起搜索' : '纪要内搜索',
             icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
@@ -926,7 +929,13 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
               side: const BorderSide(color: AppColors.cardBorder),
             ),
             onSelected: (value) {
-              if (value == 'rename') {
+              if (value == 'export') {
+                _showExportDialog();
+              } else if (value == 'toggle_view') {
+                setState(() {
+                  _isGroupedView = !_isGroupedView;
+                });
+              } else if (value == 'rename') {
                 _renameTitle();
               } else if (value == 'optimize_context') {
                 _optimizeContextAndMerge();
@@ -941,6 +950,36 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
               }
             },
             itemBuilder: (context) => [
+              if (!isWideDesktop) ...[
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Row(
+                    children: [
+                      Icon(Icons.ios_share_rounded, size: 18, color: AppColors.primary),
+                      SizedBox(width: 8),
+                      Text('导出多格式文档', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'toggle_view',
+                  child: Row(
+                    children: [
+                      Icon(
+                        _isGroupedView ? Icons.view_stream_rounded : Icons.chat_bubble_outline_rounded,
+                        size: 18,
+                        color: Colors.white70,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isGroupedView ? '切换为逐句卡片模式' : '切换为会话流聚合模式',
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+              ],
               const PopupMenuItem(
                 value: 'rename',
                 child: Row(
@@ -1606,50 +1645,56 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             ),
             child: Row(
               children: [
-                // 发言人头像与姓名 (独立点击改名，杜绝手势竞争冲突)
-                InkWell(
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: () => _editSpeakerRoleName(group.speakerId, group.speakerName),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            color: speakerColor.color.withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: speakerColor.color, width: 1.2),
-                          ),
-                          child: Center(
-                            child: Text(
-                              group.speakerName.isNotEmpty ? group.speakerName.characters.first : '?',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: speakerColor.color,
+                // 发言人头像与姓名 (自适应柔性约束与独立点击改名，杜绝长昵称横向溢出)
+                Flexible(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () => _editSpeakerRoleName(group.speakerId, group.speakerName),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: speakerColor.color.withValues(alpha: 0.2),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: speakerColor.color, width: 1.2),
+                            ),
+                            child: Center(
+                              child: Text(
+                                group.speakerName.isNotEmpty ? group.speakerName.characters.first : '?',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: speakerColor.color,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          group.speakerName,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: speakerColor.color,
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              group.speakerName,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: speakerColor.color,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 4),
-                        Icon(
-                          Icons.edit_outlined,
-                          size: 13,
-                          color: speakerColor.color.withValues(alpha: 0.7),
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.edit_outlined,
+                            size: 13,
+                            color: speakerColor.color.withValues(alpha: 0.7),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1810,44 +1855,50 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             children: [
               Row(
                 children: [
-                  // 角色色标徽章 (点击可修改角色姓名并沉淀声纹)
-                  InkWell(
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => _editSpeakerRoleName(seg.speakerId, roleName),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: speakerColor.color.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: speakerColor.color.withValues(alpha: 0.4)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 7,
-                            height: 7,
-                            decoration: BoxDecoration(
-                              color: speakerColor.color,
-                              shape: BoxShape.circle,
+                  // 角色色标徽章 (柔性自适应与点击修改角色姓名，杜绝长昵称溢出)
+                  Flexible(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () => _editSpeakerRoleName(seg.speakerId, roleName),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: speakerColor.color.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: speakerColor.color.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: speakerColor.color,
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            roleName,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: speakerColor.color,
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                roleName,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: speakerColor.color,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.edit_outlined,
-                            size: 12,
-                            color: speakerColor.color.withValues(alpha: 0.7),
-                          ),
-                        ],
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.edit_outlined,
+                              size: 12,
+                              color: speakerColor.color.withValues(alpha: 0.7),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -1996,14 +2047,14 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // 左侧：倍速切换胶囊
+                // 左侧：倍速切换胶囊 (自适应窄屏宽度)
                 SizedBox(
-                  width: 56,
+                  width: isCompact ? 48 : 56,
                   child: OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white70,
                       side: const BorderSide(color: AppColors.cardBorder),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      padding: EdgeInsets.symmetric(horizontal: isCompact ? 4 : 6, vertical: 4),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -2016,35 +2067,39 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                     },
                     child: Text(
                       '${state.playbackRate}x',
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, fontWeight: FontWeight.bold),
+                      style: TextStyle(fontFamily: 'monospace', fontSize: isCompact ? 10.5 : 11.5, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
-                // 中央：播放控制按钮组
+                // 中央：播放控制按钮组 (窄屏紧凑间距自适应，绝不横向越界)
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.all(isCompact ? 4 : 8),
+                      constraints: BoxConstraints(minWidth: isCompact ? 32 : 40, minHeight: isCompact ? 32 : 40),
                       tooltip: '上一段发言',
-                      icon: const Icon(Icons.skip_previous_rounded, color: Colors.white70),
+                      icon: Icon(Icons.skip_previous_rounded, color: Colors.white70, size: isCompact ? 20 : 24),
                       onPressed: state.activeSegmentIndex > 0
                           ? () => _controller.seekToSegment(state.activeSegmentIndex - 1)
                           : null,
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.all(isCompact ? 4 : 8),
+                      constraints: BoxConstraints(minWidth: isCompact ? 32 : 40, minHeight: isCompact ? 32 : 40),
                       tooltip: '快退 5 秒',
-                      icon: const Icon(Icons.replay_5_rounded, color: Colors.white),
+                      icon: Icon(Icons.replay_5_rounded, color: Colors.white, size: isCompact ? 20 : 24),
                       onPressed: () => _controller.seek(state.positionMs - 5000),
                     ),
-                    const SizedBox(width: 6),
+                    SizedBox(width: isCompact ? 3 : 6),
                     InkWell(
                       onTap: _controller.togglePlay,
                       borderRadius: BorderRadius.circular(26),
                       child: Container(
-                        width: 44,
-                        height: 44,
+                        width: isCompact ? 40 : 44,
+                        height: isCompact ? 40 : 44,
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
                             colors: [AppColors.primary, AppColors.primaryDark],
@@ -2061,21 +2116,25 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                         child: Icon(
                           state.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                           color: Colors.white,
-                          size: 26,
+                          size: isCompact ? 22 : 26,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    SizedBox(width: isCompact ? 3 : 6),
                     IconButton(
                       visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.all(isCompact ? 4 : 8),
+                      constraints: BoxConstraints(minWidth: isCompact ? 32 : 40, minHeight: isCompact ? 32 : 40),
                       tooltip: '快进 5 秒',
-                      icon: const Icon(Icons.forward_5_rounded, color: Colors.white),
+                      icon: Icon(Icons.forward_5_rounded, color: Colors.white, size: isCompact ? 20 : 24),
                       onPressed: () => _controller.seek(state.positionMs + 5000),
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.all(isCompact ? 4 : 8),
+                      constraints: BoxConstraints(minWidth: isCompact ? 32 : 40, minHeight: isCompact ? 32 : 40),
                       tooltip: '下一段发言',
-                      icon: const Icon(Icons.skip_next_rounded, color: Colors.white70),
+                      icon: Icon(Icons.skip_next_rounded, color: Colors.white70, size: isCompact ? 20 : 24),
                       onPressed: (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < totalSegments - 1)
                           ? () => _controller.seekToSegment(state.activeSegmentIndex + 1)
                           : null,
@@ -2084,13 +2143,13 @@ class _SyncPlayerScreenState extends State<SyncPlayerScreen> {
                 ),
                 // 右侧对称段落进度指示 (保持播放按钮严格居中且不溢出)
                 SizedBox(
-                  width: 56,
+                  width: isCompact ? 48 : 56,
                   child: Text(
                     state.activeSegmentIndex >= 0
                         ? '${state.activeSegmentIndex + 1}/$totalSegments'
                         : '$totalSegments段',
                     textAlign: TextAlign.right,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppColors.textMuted),
+                    style: TextStyle(fontFamily: 'monospace', fontSize: isCompact ? 10 : 11, color: AppColors.textMuted),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

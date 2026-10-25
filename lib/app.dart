@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/constants/app_colors.dart';
 import 'core/constants/app_constants.dart';
 import 'core/theme/app_theme_provider.dart';
 import 'presentation/main_navigation_screen.dart';
 
-/// PolyScribe 根应用组件 (内置 ProviderScope 并在 Consumer 中响应全局主题)
+/// PolyScribe 根应用组件 (内置 ProviderScope 并在 Consumer 中响应全局主题与深浅切换)
 class PolyScribeApp extends StatelessWidget {
   const PolyScribeApp({super.key});
 
@@ -14,8 +15,13 @@ class PolyScribeApp extends StatelessWidget {
       child: Consumer(
         builder: (context, ref, child) {
           final themeMode = ref.watch(themeModeProvider);
+          final platformBrightness = MediaQuery.platformBrightnessOf(context);
+          final isDark = themeMode == ThemeMode.dark ||
+              (themeMode == ThemeMode.system && platformBrightness == Brightness.dark);
+          AppColors.isDark = isDark;
 
           return MaterialApp(
+            key: ValueKey('$themeMode-$isDark'),
             title: AppConstants.appFullName,
             debugShowCheckedModeBanner: false,
             themeMode: themeMode,

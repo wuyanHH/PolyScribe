@@ -3,10 +3,10 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'native_audio_bridge.dart';
 import 'wav_codec.dart';
+import '../../services/app_storage_service.dart';
 
 /// 录音音源捕获模式
 enum AudioSourceMode {
@@ -225,18 +225,7 @@ class WindowsWasapiRecorder {
     await _finalizeMobileWavFile();
 
     final id = taskId ?? 'live_${DateTime.now().millisecondsSinceEpoch}';
-    Directory baseDir;
-    try {
-      baseDir = await getApplicationSupportDirectory();
-    } catch (_) {
-      baseDir = await getTemporaryDirectory();
-    }
-
-    final recordingsDir = Directory(p.join(baseDir.path, 'recordings', id));
-    if (!recordingsDir.existsSync()) {
-      recordingsDir.createSync(recursive: true);
-    }
-
+    final recordingsDir = await AppStorageService.instance.getRecordingsDirectory(taskId: id);
     final filePath = p.join(recordingsDir.path, 'audio_live.wav');
     _currentRecordingPath = filePath;
 

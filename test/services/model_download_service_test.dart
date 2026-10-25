@@ -5,15 +5,31 @@ import 'package:polyscribe/services/model_download_service.dart';
 void main() {
   group('ModelPackageInfo & PredefinedModels 模型包元数据测试', () {
     test('预定义模型清单完整性验证', () {
-      expect(PredefinedModels.all.length, 4);
+      expect(PredefinedModels.all.length, 7);
+      expect(PredefinedModels.asrModels.length, 4);
 
       final senseVoice = PredefinedModels.senseVoiceSmall;
       expect(senseVoice.id, 'sensevoice_small');
+      expect(senseVoice.isAsrModel, isTrue);
       expect(senseVoice.targetFileNames, contains('sensevoice_small_int8.onnx'));
       expect(senseVoice.targetFileNames, contains('tokens.txt'));
 
+      final paraformer = PredefinedModels.paraformerZh;
+      expect(paraformer.id, 'paraformer_zh');
+      expect(paraformer.isAsrModel, isTrue);
+      expect(paraformer.targetFileNames, contains('paraformer_model.int8.onnx'));
+
+      final qwen3 = PredefinedModels.qwen3Asr;
+      expect(qwen3.id, 'qwen3_asr');
+      expect(qwen3.isAsrModel, isTrue);
+
+      final parakeet = PredefinedModels.parakeetTdt;
+      expect(parakeet.id, 'parakeet_tdt');
+      expect(parakeet.isAsrModel, isTrue);
+
       final vad = PredefinedModels.sileroVad;
       expect(vad.id, 'silero_vad');
+      expect(vad.isAsrModel, isFalse);
       expect(vad.targetFileNames, contains('silero_vad.onnx'));
     });
 

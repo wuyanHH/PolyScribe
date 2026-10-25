@@ -578,7 +578,18 @@ bool NativeAudioEngine::DecodeFileTo16kMonoWav(const std::wstring& input_path,
   std::vector<float> all_mono_samples;
   all_mono_samples.reserve(static_cast<size_t>(src_rate) * 60);
 
+  int consecutive_empty_samples = 0;
+  const auto decode_start_time = std::chrono::steady_clock::now();
+
   while (true) {
+    // 增加总体防挂死超时检查 (单个音频最长 180 秒)
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - decode_start_time).count();
+    if (elapsed > 180) {
+      if (out_error) *out_error = "Media Foundation decode timed out after 180s";
+      break;
+    }
+
     DWORD stream_flags = 0;
     ComPtr<IMFSample> sample;
     hr = reader->ReadSample(
@@ -586,7 +597,17 @@ bool NativeAudioEngine::DecodeFileTo16kMonoWav(const std::wstring& input_path,
         &stream_flags, nullptr, &sample);
     if (FAILED(hr)) break;
     if (stream_flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-    if (!sample) continue;
+    if (stream_flags & MF_SOURCE_READERF_ERROR) break;
+
+    if (!sample) {
+      consecutive_empty_samples++;
+      if (consecutive_empty_samples > 30) {
+        // 连续 30 次未产生有效采样数据帧，视同音频流已结束，安全跳出循环杜绝 CPU 死循环
+        break;
+      }
+      continue;
+    }
+    consecutive_empty_samples = 0;
 
     // 如中途发生流格式变更，动态刷新 WAVEFORMATEX
     if (stream_flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) {

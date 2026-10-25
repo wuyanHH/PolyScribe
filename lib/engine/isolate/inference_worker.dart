@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import '../../core/constants/app_constants.dart';
+import '../../data/models/transcript_segment.dart';
 import '../diarization/online_centroid_bank.dart';
 import '../model_manager.dart';
+import '../text/transcript_cleaner.dart';
 import 'worker_message.dart';
 
 /// 推理工作线程协调器 (运行在主线程，通过 Isolate 与底层 AI 交互)
@@ -189,6 +191,13 @@ class InferenceWorkerCoordinator {
       messageId: 'cancel_${DateTime.now().millisecondsSinceEpoch}',
       taskId: taskId,
     ));
+  }
+
+  /// 重新加载或热切换模型
+  Future<bool> reloadModel(ModelConfig config) async {
+    debugPrint('[InferenceWorker] 触发模型热重载: ${config.currentAsrName}');
+    await dispose();
+    return await initialize(config);
   }
 
   /// 销毁并退出工作线程
@@ -444,9 +453,130 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
     emaAlpha: AppConstants.emaAlpha,
   );
   String lastTaskId = '';
+  String lastSliceText = '';
+  String lastLiveChunkText = '';
   String? cancelledTaskId;
 
-  /// 对单个安全切片执行 SenseVoice 识别 + 声纹聚类并汇报段落
+  /// 根据配置构建 sherpa-onnx 离线识别器模型配置 (支持 SenseVoice / Paraformer / Qwen3-ASR / Parakeet)
+  sherpa.OfflineModelConfig buildModelConfig(ModelConfig config) {
+    final activeId = config.activeAsrModelId;
+
+    // 1. Paraformer-zh 阿里达摩院工业级中文
+    if (activeId == 'paraformer_zh' && config.isParaformerReady) {
+      debugPrint('[InferenceWorker] 装载 ASR 引擎: Paraformer-zh');
+      return sherpa.OfflineModelConfig(
+        paraformer: sherpa.OfflineParaformerModelConfig(
+          model: config.paraformerModelPath,
+        ),
+        tokens: config.paraformerTokensPath,
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    // 2. Qwen3-ASR 0.6B 通义千问大模型语义识别
+    if (activeId == 'qwen3_asr' && config.isQwen3Ready) {
+      debugPrint('[InferenceWorker] 装载 ASR 引擎: Qwen3-ASR 0.6B');
+      return sherpa.OfflineModelConfig(
+        qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
+          convFrontend: config.qwen3ConvFrontendPath,
+          encoder: config.qwen3EncoderPath,
+          decoder: config.qwen3DecoderPath,
+          tokenizer: config.qwen3TokenizerPath,
+          hotwords: config.hotwords,
+        ),
+        tokens: '',
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    // 3. Parakeet-TDT 0.6B NVIDIA Transducer
+    if (activeId == 'parakeet_tdt' && config.isParakeetReady) {
+      debugPrint('[InferenceWorker] 装载 ASR 引擎: Parakeet-TDT 0.6B');
+      return sherpa.OfflineModelConfig(
+        transducer: sherpa.OfflineTransducerModelConfig(
+          encoder: config.parakeetEncoderPath,
+          decoder: config.parakeetDecoderPath,
+          joiner: config.parakeetJoinerPath,
+        ),
+        tokens: config.parakeetTokensPath,
+        modelType: 'nemo_transducer',
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    // 4. SenseVoice-Small (默认高兼容性)
+    if (config.isSenseVoiceReady) {
+      debugPrint('[InferenceWorker] 装载 ASR 引擎: SenseVoice-Small');
+      return sherpa.OfflineModelConfig(
+        senseVoice: sherpa.OfflineSenseVoiceModelConfig(
+          model: config.senseVoiceModelPath,
+          language: config.preferredLanguage.isNotEmpty ? config.preferredLanguage : 'zh',
+          useInverseTextNormalization: true,
+        ),
+        tokens: config.senseVoiceTokensPath,
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    // 自动回退保护：尝试任一已就绪的模型
+    if (config.isParaformerReady) {
+      debugPrint('[InferenceWorker] 回退装载就绪引擎: Paraformer-zh');
+      return sherpa.OfflineModelConfig(
+        paraformer: sherpa.OfflineParaformerModelConfig(
+          model: config.paraformerModelPath,
+        ),
+        tokens: config.paraformerTokensPath,
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    if (config.isQwen3Ready) {
+      debugPrint('[InferenceWorker] 回退装载就绪引擎: Qwen3-ASR');
+      return sherpa.OfflineModelConfig(
+        qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
+          convFrontend: config.qwen3ConvFrontendPath,
+          encoder: config.qwen3EncoderPath,
+          decoder: config.qwen3DecoderPath,
+          tokenizer: config.qwen3TokenizerPath,
+          hotwords: config.hotwords,
+        ),
+        tokens: '',
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    if (config.isParakeetReady) {
+      debugPrint('[InferenceWorker] 回退装载就绪引擎: Parakeet-TDT');
+      return sherpa.OfflineModelConfig(
+        transducer: sherpa.OfflineTransducerModelConfig(
+          encoder: config.parakeetEncoderPath,
+          decoder: config.parakeetDecoderPath,
+          joiner: config.parakeetJoinerPath,
+        ),
+        tokens: config.parakeetTokensPath,
+        modelType: 'nemo_transducer',
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu',
+      );
+    }
+
+    throw Exception('未找到任何已完整部署的 ASR 语音识别模型资产，请先在模型管理中心下载部署。');
+  }
+
+  /// 对单个安全切片执行识别 + 上下文清洗 + 声纹聚类并汇报段落
   TranscriptSegmentPayload? recognizeAndDiarizeSlice({
     required _VadSpeechSlice slice,
     required int sampleRate,
@@ -461,12 +591,40 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
     final normalized = _prepareSliceForAsr(slice.samples);
 
     String recognizedText = '';
+    final words = <WordTimestamp>[];
     final stream = recognizer!.createStream();
     try {
       stream.acceptWaveform(samples: normalized, sampleRate: sampleRate);
       recognizer!.decode(stream);
       final result = recognizer!.getResult(stream);
-      recognizedText = formatSenseVoiceText(result.text);
+      // 1. 转译 SenseVoice 特殊标记并进行基础清洗
+      final rawFormatted = formatSenseVoiceText(result.text);
+      recognizedText = TranscriptCleaner.cleanRawText(rawFormatted);
+
+      // 2. 提取 Token / Word 级精确时间戳 (解决时间错位，提供词级别音字同步)
+      if (result.tokens.isNotEmpty && result.timestamps.length == result.tokens.length) {
+        for (int i = 0; i < result.tokens.length; i++) {
+          final tok = result.tokens[i].trim();
+          if (tok.isEmpty || tok.startsWith('<|') || tok.startsWith('[')) continue;
+          final tokStart = startMs + (result.timestamps[i] * 1000).toInt();
+          final tokEnd = (i + 1 < result.timestamps.length)
+              ? startMs + (result.timestamps[i + 1] * 1000).toInt()
+              : min(endMs, tokStart + 350);
+          words.add(WordTimestamp(
+            word: tok,
+            startMs: tokStart,
+            endMs: max(tokStart + 10, tokEnd),
+          ));
+        }
+      }
+
+      // 3. 跨切片首尾重叠消除 (Contextual Deduplication)
+      if (lastSliceText.isNotEmpty && recognizedText.isNotEmpty) {
+        recognizedText = TranscriptCleaner.removeOverlap(lastSliceText, recognizedText);
+      }
+      if (recognizedText.isNotEmpty) {
+        lastSliceText = recognizedText;
+      }
     } finally {
       stream.free();
     }
@@ -492,11 +650,13 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
           if (embeddingExtractor!.isReady(spkStream)) {
             final embedding = embeddingExtractor!.compute(spkStream);
             if (embedding.isNotEmpty) {
+              // 引入语音识别文本语义反哺说话人分离裁决 (Semantic-Acoustic Joint Diarization)
               final diar = centroidBank.assignSpeaker(
                 embedding: embedding,
                 durationMs: endMs - startMs,
                 startMs: startMs,
                 endMs: endMs,
+                spokenText: recognizedText,
               );
               assignedSpeakerId = diar.speakerId;
               assignedSpeakerName = diar.speakerName ??
@@ -516,6 +676,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
       startMs: startMs,
       endMs: endMs,
       text: recognizedText,
+      words: words,
     );
 
     hostSendPort.send(SegmentTranscriptionResponse(
@@ -527,6 +688,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
       startMs: startMs,
       endMs: endMs,
       text: recognizedText,
+      words: words,
       isFinal: true,
       isSuccess: true,
     ));
@@ -539,31 +701,16 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
       try {
         final config = message.config;
 
-        if (config.isSenseVoiceReady) {
-          // 初始化 SenseVoice-Small 识别器
-          final featConfig = sherpa.FeatureConfig(
-            sampleRate: 16000,
-            featureDim: 80,
-          );
-          final modelConfig = sherpa.OfflineModelConfig(
-            senseVoice: sherpa.OfflineSenseVoiceModelConfig(
-              model: config.senseVoiceModelPath,
-              language: config.preferredLanguage.isNotEmpty ? config.preferredLanguage : 'zh',
-              useInverseTextNormalization: true,
-            ),
-            tokens: config.senseVoiceTokensPath,
-            numThreads: 2,
-            debug: false,
-            provider: 'cpu',
-          );
-          final recognizerConfig = sherpa.OfflineRecognizerConfig(
-            feat: featConfig,
-            model: modelConfig,
-          );
-          recognizer = sherpa.OfflineRecognizer(recognizerConfig);
-        } else {
-          throw Exception('SenseVoice 模型资产不完整，缺少权重文件或 tokens 字典: ${config.senseVoiceModelPath}');
-        }
+        final featConfig = sherpa.FeatureConfig(
+          sampleRate: 16000,
+          featureDim: 80,
+        );
+        final modelConfig = buildModelConfig(config);
+        final recognizerConfig = sherpa.OfflineRecognizerConfig(
+          feat: featConfig,
+          model: modelConfig,
+        );
+        recognizer = sherpa.OfflineRecognizer(recognizerConfig);
 
         if (config.isVadReady) {
           try {
@@ -643,6 +790,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
 
         if (message.taskId != lastTaskId) {
           lastTaskId = message.taskId;
+          lastLiveChunkText = '';
           centroidBank = OnlineCentroidBank(
             similarityThreshold: AppConstants.speakerSimilarityThreshold,
             emaAlpha: AppConstants.emaAlpha,
@@ -653,12 +801,38 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
 
         // 使用 try-finally 确保 Stream 无论任何异常都安全释放，彻底杜绝底层句柄泄露
         String recognizedText = '';
+        final words = <WordTimestamp>[];
         final stream = recognizer!.createStream();
         try {
           stream.acceptWaveform(samples: normalizedSamples, sampleRate: 16000);
           recognizer!.decode(stream);
           final result = recognizer!.getResult(stream);
-          recognizedText = formatSenseVoiceText(result.text);
+          final raw = formatSenseVoiceText(result.text);
+          recognizedText = TranscriptCleaner.cleanRawText(raw);
+
+          // 提取 Token / Word 级精确时间戳
+          if (result.tokens.isNotEmpty && result.timestamps.length == result.tokens.length) {
+            for (int i = 0; i < result.tokens.length; i++) {
+              final tok = result.tokens[i].trim();
+              if (tok.isEmpty || tok.startsWith('<|') || tok.startsWith('[')) continue;
+              final tokStart = message.startMs + (result.timestamps[i] * 1000).toInt();
+              final tokEnd = (i + 1 < result.timestamps.length)
+                  ? message.startMs + (result.timestamps[i + 1] * 1000).toInt()
+                  : min(message.endMs, tokStart + 350);
+              words.add(WordTimestamp(
+                word: tok,
+                startMs: tokStart,
+                endMs: max(tokStart + 10, tokEnd),
+              ));
+            }
+          }
+
+          if (lastLiveChunkText.isNotEmpty && recognizedText.isNotEmpty) {
+            recognizedText = TranscriptCleaner.removeOverlap(lastLiveChunkText, recognizedText);
+          }
+          if (recognizedText.isNotEmpty) {
+            lastLiveChunkText = recognizedText;
+          }
         } finally {
           stream.free();
         }
@@ -687,6 +861,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
                     durationMs: message.endMs - message.startMs,
                     startMs: message.startMs,
                     endMs: message.endMs,
+                    spokenText: recognizedText,
                   );
                   assignedSpeakerId = diar.speakerId;
                   assignedSpeakerName = diar.speakerName ??
@@ -708,6 +883,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
           startMs: message.startMs,
           endMs: message.endMs,
           text: recognizedText,
+          words: words,
           isFinal: true,
           isSuccess: true,
         ));
@@ -733,6 +909,7 @@ void _inferenceWorkerEntryPoint(SendPort hostSendPort) {
           throw StateError('离线语音识别器未就绪或加载失败，无法转写');
         }
 
+        lastSliceText = '';
         centroidBank = OnlineCentroidBank(
           similarityThreshold: AppConstants.speakerSimilarityThreshold,
           emaAlpha: AppConstants.emaAlpha,

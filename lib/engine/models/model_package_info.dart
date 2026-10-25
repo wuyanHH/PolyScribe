@@ -1,6 +1,21 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
+/// 模型分类类型
+enum ModelCategory {
+  asr(label: '语音识别 (ASR)', badge: 'STT'),
+  vad(label: '语音活动检测 (VAD)', badge: 'VAD'),
+  diarization(label: '说话人声纹与分离', badge: 'Diarization');
+
+  final String label;
+  final String badge;
+
+  const ModelCategory({
+    required this.label,
+    required this.badge,
+  });
+}
+
 /// 模型下载网络源类型
 enum ModelDownloadSource {
   official(
@@ -46,6 +61,7 @@ class ModelPackageInfo {
   final String name;
   final String version;
   final String description;
+  final ModelCategory category;
   final int estimatedSizeBytes;
   final String sizeDisplay;
   final List<String> targetFileNames;
@@ -56,11 +72,15 @@ class ModelPackageInfo {
     required this.name,
     required this.version,
     required this.description,
+    this.category = ModelCategory.asr,
     required this.estimatedSizeBytes,
     required this.sizeDisplay,
     required this.targetFileNames,
     required this.downloadItems,
   });
+
+  /// 是否为主语音识别 ASR 模型
+  bool get isAsrModel => category == ModelCategory.asr;
 
   /// 检查该模型在目标目录下是否已经完整就绪 (校验最小有效字节数，防止残损文件被误判为已安装)
   bool isInstalled(String targetDirectory) {
@@ -70,7 +90,7 @@ class ModelPackageInfo {
         return false;
       }
       final len = file.lengthSync();
-      final minRequired = fileName.endsWith('.onnx') ? 100 * 1024 : 1024;
+      final minRequired = fileName.endsWith('.onnx') ? 100 * 1024 : 100;
       if (len < minRequired) {
         return false;
       }
@@ -86,12 +106,13 @@ class ModelPackageInfo {
 
 /// 内置的预定义模型资产清单 (链接经亲测 200 OK 验证)
 class PredefinedModels {
-  /// 主 STT 语音识别模型: SenseVoice-Small (Int8)
+  /// 1. 主 STT 语音识别模型: SenseVoice-Small (Int8)
   static const ModelPackageInfo senseVoiceSmall = ModelPackageInfo(
     id: 'sensevoice_small',
     name: 'SenseVoice-Small 离线语音识别',
     version: '2024-07-17 (Int8)',
-    description: '高精度中/粤/英/日/韩五语种自动识别，RTF ≈ 0.05 极速端侧推理',
+    description: '中/粤/英/日/韩五语种自动识别，富文本声音与情绪检测，RTF ≈ 0.05 极速端侧推理',
+    category: ModelCategory.asr,
     estimatedSizeBytes: 228 * 1024 * 1024,
     sizeDisplay: '228 MB',
     targetFileNames: ['sensevoice_small_int8.onnx', 'tokens.txt'],
@@ -121,12 +142,113 @@ class PredefinedModels {
     },
   );
 
+  /// 2. 主 STT 语音识别模型: Paraformer-zh (阿里达摩院经典工业级中文模型)
+  static const ModelPackageInfo paraformerZh = ModelPackageInfo(
+    id: 'paraformer_zh',
+    name: 'Paraformer-zh 工业级中文识别',
+    version: '2023-09-14 (Int8)',
+    description: '阿里达摩院中文工业级王牌模型，极低字错率 (CER)，中文咬字稳定且断句精准',
+    category: ModelCategory.asr,
+    estimatedSizeBytes: 230 * 1024 * 1024,
+    sizeDisplay: '230 MB',
+    targetFileNames: ['paraformer_model.int8.onnx', 'paraformer_tokens.txt'],
+    downloadItems: {
+      ModelDownloadSource.official: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-2023-09-14.tar.bz2',
+          destinationFileName: 'paraformer_zh.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 230 * 1024 * 1024,
+        ),
+      ],
+      ModelDownloadSource.modelScope: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-2023-09-14.tar.bz2',
+          destinationFileName: 'paraformer_zh.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 230 * 1024 * 1024,
+        ),
+      ],
+    },
+  );
+
+  /// 3. 主 STT 语音识别模型: Qwen3-ASR (通义千问大模型语音识别)
+  static const ModelPackageInfo qwen3Asr = ModelPackageInfo(
+    id: 'qwen3_asr',
+    name: 'Qwen3-ASR 0.6B 大模型语义识别',
+    version: '0.6B (Int8)',
+    description: '结合通义千问语言解码器，深层上下文语义纠错与连贯断句，同音词区分度极高',
+    category: ModelCategory.asr,
+    estimatedSizeBytes: 480 * 1024 * 1024,
+    sizeDisplay: '480 MB',
+    targetFileNames: [
+      'qwen3_conv_frontend.int8.onnx',
+      'qwen3_encoder.int8.onnx',
+      'qwen3_decoder.int8.onnx',
+      'qwen3_tokenizer.json',
+    ],
+    downloadItems: {
+      ModelDownloadSource.official: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2',
+          destinationFileName: 'qwen3_asr.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 480 * 1024 * 1024,
+        ),
+      ],
+      ModelDownloadSource.modelScope: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2',
+          destinationFileName: 'qwen3_asr.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 480 * 1024 * 1024,
+        ),
+      ],
+    },
+  );
+
+  /// 4. 主 STT 语音识别模型: Parakeet-TDT 0.6B (NVIDIA 英文与多语种王牌)
+  static const ModelPackageInfo parakeetTdt = ModelPackageInfo(
+    id: 'parakeet_tdt',
+    name: 'Parakeet-TDT 0.6B 英文与多语种识别',
+    version: 'v3 (Int8)',
+    description: 'NVIDIA 开源 SOTA 级 Transducer 架构，英文会议与欧洲多语种转写天花板',
+    category: ModelCategory.asr,
+    estimatedSizeBytes: 450 * 1024 * 1024,
+    sizeDisplay: '450 MB',
+    targetFileNames: [
+      'parakeet_encoder.int8.onnx',
+      'parakeet_decoder.int8.onnx',
+      'parakeet_joiner.int8.onnx',
+      'parakeet_tokens.txt',
+    ],
+    downloadItems: {
+      ModelDownloadSource.official: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
+          destinationFileName: 'parakeet_tdt.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 450 * 1024 * 1024,
+        ),
+      ],
+      ModelDownloadSource.modelScope: [
+        DownloadItem(
+          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
+          destinationFileName: 'parakeet_tdt.tar.bz2',
+          isArchive: true,
+          estimatedSizeBytes: 450 * 1024 * 1024,
+        ),
+      ],
+    },
+  );
+
   /// VAD 语音活动检测: Silero-VAD v5
   static const ModelPackageInfo sileroVad = ModelPackageInfo(
     id: 'silero_vad',
     name: 'Silero-VAD v5 语音活动检测',
     version: 'v5.0',
     description: '毫秒级精准检测人声起止，滤除背景杂音与静音无效片段',
+    category: ModelCategory.vad,
     estimatedSizeBytes: 2 * 1024 * 1024,
     sizeDisplay: '1.8 MB',
     targetFileNames: ['silero_vad.onnx'],
@@ -156,6 +278,7 @@ class PredefinedModels {
     name: 'Pyannote 3.0 角色切分边界检测',
     version: '3.0',
     description: '多人会议抢话与轮流发言边界侦测，自动分割不同说话人音频片断',
+    category: ModelCategory.diarization,
     estimatedSizeBytes: 6 * 1024 * 1024,
     sizeDisplay: '6.0 MB',
     targetFileNames: ['pyannote_segmentation.onnx'],
@@ -185,6 +308,7 @@ class PredefinedModels {
     name: 'CAM++ / 3D-Speaker 声纹特征提取',
     version: '16k-zh-cn',
     description: '阿里开源高维声纹向量提取器，精准归集说话人身份聚类',
+    category: ModelCategory.diarization,
     estimatedSizeBytes: 28 * 1024 * 1024,
     sizeDisplay: '28.0 MB',
     targetFileNames: ['campp_plus.onnx'],
@@ -208,10 +332,21 @@ class PredefinedModels {
     },
   );
 
+  /// 所有支持的语音识别 (ASR) 引擎候选列表
+  static const List<ModelPackageInfo> asrModels = [
+    senseVoiceSmall,
+    paraformerZh,
+    qwen3Asr,
+    parakeetTdt,
+  ];
+
   /// 所有支持的标准核心模型列表
   static const List<ModelPackageInfo> all = [
-    sileroVad,
     senseVoiceSmall,
+    paraformerZh,
+    qwen3Asr,
+    parakeetTdt,
+    sileroVad,
     campp,
     pyannote,
   ];
