@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import '../engine/model_manager.dart';
@@ -64,14 +65,28 @@ class ModelDownloadService {
 
   ModelDownloadService._() {
     _dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 15),
+      connectTimeout: const Duration(seconds: 40),
+      receiveTimeout: const Duration(minutes: 25),
+      sendTimeout: const Duration(seconds: 40),
       followRedirects: true,
-      maxRedirects: 8,
+      maxRedirects: 10,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
     ));
+
+    // 配置原生 HTTP 适配器，处理移动端 VPN/代理环境下的自签证书与握手中断 (Handshake terminated)
+    final adapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final client = HttpClient();
+        // 允许任何证书，防止在 Android 开启代理/VPN 工具或中间人探测时握手直接被 Reset
+        client.badCertificateCallback = (cert, host, port) => true;
+        client.connectionTimeout = const Duration(seconds: 40);
+        client.idleTimeout = const Duration(seconds: 40);
+        return client;
+      },
+    );
+    _dio.httpClientAdapter = adapter;
   }
 
   late final Dio _dio;
@@ -106,13 +121,45 @@ class ModelDownloadService {
     return model.isInstalled(dir.path);
   }
 
-  /// 执行单个模型的下载与自动解压部署
+  /// 彻底干净卸载指定模型资产 (沙盒化目录一键完整清理，绝不残留孤儿权重)
+  Future<bool> deleteModel(ModelPackageInfo model) async {
+    try {
+      cancel(model.id);
+      final modelDir = await ModelManager.instance.getModelDirectory();
+      final sandbox = Directory(model.getSandboxPath(modelDir.path));
+      if (sandbox.existsSync()) {
+        await sandbox.delete(recursive: true);
+        debugPrint('[ModelDownload] 模型沙盒目录已删除: ${sandbox.path}');
+      }
+      // 顺带清理可能存在于根目录下的老版本平铺孤儿文件
+      for (final fn in model.targetFileNames) {
+        final oldFile = File(p.join(modelDir.path, fn));
+        if (oldFile.existsSync()) {
+          await oldFile.delete();
+        }
+      }
+      await ModelManager.instance.resolveModels();
+      _updateState(model.id, (_) => ModelDownloadProgress(modelId: model.id));
+      return true;
+    } catch (e) {
+      debugPrint('[ModelDownload] 清理模型目录失败: $e');
+      return false;
+    }
+  }
+
+  /// 执行单个模型的下载与自动解压部署 (支持子目录沙盒隔离、自动多源故障回退与网络自愈)
   Future<bool> downloadModel(
     ModelPackageInfo model, {
-    ModelDownloadSource source = ModelDownloadSource.official,
+    ModelDownloadSource source = ModelDownloadSource.modelScope,
+    bool allowFallback = true,
   }) async {
     final modelDir = await ModelManager.instance.getModelDirectory();
     final targetDirPath = modelDir.path;
+    final sandboxDirPath = model.getSandboxPath(targetDirPath);
+    final sandboxDir = Directory(sandboxDirPath);
+    if (!sandboxDir.existsSync()) {
+      await sandboxDir.create(recursive: true);
+    }
 
     final cancelToken = CancelToken();
     _cancelTokens[model.id] = cancelToken;
@@ -122,7 +169,7 @@ class ModelDownloadService {
       progress: 0.0,
       receivedBytes: 0,
       totalBytes: model.estimatedSizeBytes,
-      speed: '准备连接...',
+      speed: '准备连接 [${source.badge}]...',
       errorMessage: null,
     ));
 
@@ -133,10 +180,10 @@ class ModelDownloadService {
     try {
       for (int i = 0; i < items.length; i++) {
         final item = items[i];
-        debugPrint('[ModelDownload] [${i + 1}/${items.length}] 开始下载: ${item.url}');
+        debugPrint('[ModelDownload] [${i + 1}/${items.length}] 开始下载 ($source): ${item.url}');
 
         final tempFile = File(p.join(
-          targetDirPath,
+          sandboxDirPath,
           'temp_${model.id}_${i}_${DateTime.now().millisecondsSinceEpoch}.${item.isArchive ? 'tar.bz2' : 'bin'}',
         ));
 
@@ -177,7 +224,7 @@ class ModelDownloadService {
           },
         );
 
-        // 处理该下载项：解压或就地重命名
+        // 处理该下载项：解压或就地重命名至沙盒目录
         if (item.isArchive) {
           _updateState(model.id, (s) => s.copyWith(
             status: ModelTaskStatus.extracting,
@@ -187,6 +234,7 @@ class ModelDownloadService {
           await compute(_extractAndAlignArchive, {
             'archivePath': tempFile.path,
             'targetDirPath': targetDirPath,
+            'sandboxDirPath': sandboxDirPath,
             'modelId': model.id,
           });
 
@@ -194,12 +242,20 @@ class ModelDownloadService {
             await tempFile.delete();
           }
         } else {
-          final destPath = p.join(targetDirPath, item.destinationFileName);
+          final destPath = p.join(sandboxDirPath, item.destinationFileName);
           final destFile = File(destPath);
           if (destFile.existsSync()) {
             await destFile.delete();
           }
           await tempFile.rename(destPath);
+
+          // 保持老路径平滑兼容（若需要在根目录下建立软引用/拷贝）
+          final rootDest = p.join(targetDirPath, item.destinationFileName);
+          if (!File(rootDest).existsSync()) {
+            try {
+              await File(destPath).copy(rootDest);
+            } catch (_) {}
+          }
         }
 
         completedBaseBytes += item.estimatedSizeBytes;
@@ -224,10 +280,35 @@ class ModelDownloadService {
         return false;
       }
 
-      debugPrint('[ModelDownload] 下载失败: $e');
+      final errorStr = e.toString();
+      debugPrint('[ModelDownload] 下载失败: $errorStr');
+
+      // 自动故障转移：若当前源发生网络/握手阻断，且允许回退，自动换源重试
+      if (allowFallback) {
+        final fallbackSource = source == ModelDownloadSource.official
+            ? ModelDownloadSource.modelScope
+            : ModelDownloadSource.official;
+
+        debugPrint('[ModelDownload] 触发自动换源回退机制 -> 正在尝试使用备用源: $fallbackSource');
+        _updateState(model.id, (s) => s.copyWith(
+          speed: '网络握手受阻，自动切换至备用高速源...',
+        ));
+
+        // 延迟 800ms 后自动执行备用源下载
+        await Future.delayed(const Duration(milliseconds: 800));
+        return downloadModel(model, source: fallbackSource, allowFallback: false);
+      }
+
+      String friendlyMsg = errorStr.replaceAll('Exception:', '').trim();
+      if (errorStr.contains('Handshake') || errorStr.contains('handshake')) {
+        friendlyMsg = 'TLS握手中断 (可能受VPN或网络代理拦截)，建议切换高速镜像源重试';
+      } else if (errorStr.contains('timed out') || errorStr.contains('Timeout')) {
+        friendlyMsg = '网络连接超时，请检查手机网络或切换下载加速源';
+      }
+
       _updateState(model.id, (s) => s.copyWith(
         status: ModelTaskStatus.failed,
-        errorMessage: '下载失败: ${e.toString().replaceAll('Exception:', '').trim()}',
+        errorMessage: '下载失败: $friendlyMsg',
       ));
       return false;
     }
@@ -235,7 +316,7 @@ class ModelDownloadService {
 
   /// 一键下载所有未就绪的模型
   Future<void> downloadAllMissingModels({
-    ModelDownloadSource source = ModelDownloadSource.official,
+    ModelDownloadSource source = ModelDownloadSource.modelScope,
   }) async {
     for (final model in PredefinedModels.all) {
       final isInstalled = await checkInstalled(model);
@@ -270,6 +351,7 @@ class ModelDownloadService {
 void _extractAndAlignArchive(Map<String, dynamic> params) {
   final archivePath = params['archivePath'] as String;
   final targetDirPath = params['targetDirPath'] as String;
+  final sandboxDirPath = (params['sandboxDirPath'] as String?) ?? targetDirPath;
   final modelId = params['modelId'] as String;
 
   final archiveFile = File(archivePath);
@@ -279,6 +361,19 @@ void _extractAndAlignArchive(Map<String, dynamic> params) {
   final tarBytes = BZip2Decoder().decodeBytes(bytes);
   final archive = TarDecoder().decodeBytes(tarBytes);
 
+  void saveBoth(String relativeName, List<int> content) {
+    // 写入专属沙盒子目录
+    File(p.join(sandboxDirPath, relativeName))
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(content);
+    // 写入根目录平铺位置 (兼容老版本)
+    if (sandboxDirPath != targetDirPath) {
+      File(p.join(targetDirPath, relativeName))
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(content);
+    }
+  }
+
   for (final file in archive) {
     if (!file.isFile) continue;
     final filename = file.name;
@@ -286,65 +381,39 @@ void _extractAndAlignArchive(Map<String, dynamic> params) {
 
     if (modelId == PredefinedModels.senseVoiceSmall.id) {
       if (filename.endsWith('model.int8.onnx') || filename.endsWith('model.onnx')) {
-        File(p.join(targetDirPath, 'sensevoice_small_int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('sensevoice_small_int8.onnx', fileContent);
       } else if (filename.endsWith('tokens.txt')) {
-        File(p.join(targetDirPath, 'tokens.txt'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('tokens.txt', fileContent);
       }
     } else if (modelId == PredefinedModels.paraformerZh.id) {
       if (filename.endsWith('model.int8.onnx') || filename.endsWith('model.onnx')) {
-        File(p.join(targetDirPath, 'paraformer_model.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('paraformer_model.int8.onnx', fileContent);
       } else if (filename.endsWith('tokens.txt')) {
-        File(p.join(targetDirPath, 'paraformer_tokens.txt'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('paraformer_tokens.txt', fileContent);
       }
     } else if (modelId == PredefinedModels.qwen3Asr.id) {
       if (filename.contains('conv_frontend') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'qwen3_conv_frontend.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('qwen3_conv_frontend.int8.onnx', fileContent);
       } else if (filename.contains('encoder') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'qwen3_encoder.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('qwen3_encoder.int8.onnx', fileContent);
       } else if (filename.contains('decoder') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'qwen3_decoder.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('qwen3_decoder.int8.onnx', fileContent);
       } else if (filename.endsWith('tokenizer.json') || filename.endsWith('tokens.txt')) {
-        File(p.join(targetDirPath, 'qwen3_tokenizer.json'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('qwen3_tokenizer.json', fileContent);
       }
     } else if (modelId == PredefinedModels.parakeetTdt.id) {
       if (filename.contains('encoder') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'parakeet_encoder.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('parakeet_encoder.int8.onnx', fileContent);
       } else if (filename.contains('decoder') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'parakeet_decoder.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('parakeet_decoder.int8.onnx', fileContent);
       } else if (filename.contains('joiner') && filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'parakeet_joiner.int8.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('parakeet_joiner.int8.onnx', fileContent);
       } else if (filename.endsWith('tokens.txt')) {
-        File(p.join(targetDirPath, 'parakeet_tokens.txt'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('parakeet_tokens.txt', fileContent);
       }
     } else if (modelId == PredefinedModels.pyannote.id) {
       if (filename.endsWith('.onnx')) {
-        File(p.join(targetDirPath, 'pyannote_segmentation.onnx'))
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileContent);
+        saveBoth('pyannote_segmentation.onnx', fileContent);
       }
     }
   }

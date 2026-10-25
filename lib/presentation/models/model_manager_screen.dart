@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import '../../core/constants/app_colors.dart';
 import '../../core/utils/app_toast.dart';
+import '../../data/database/app_database.dart';
 import '../../engine/isolate/inference_worker.dart';
 import '../../engine/model_manager.dart';
 import '../../engine/models/model_package_info.dart';
+import '../../services/app_storage_service.dart';
 import '../../services/model_download_service.dart';
 
 /// AI 模型下载与更新管理中心 (桌面宽屏自适应 + 多源加速切换 + 实时解压进度)
@@ -19,7 +23,7 @@ class ModelManagerScreen extends StatefulWidget {
 
 class _ModelManagerScreenState extends State<ModelManagerScreen> {
   final ModelDownloadService _downloadService = ModelDownloadService.instance;
-  ModelDownloadSource _selectedSource = ModelDownloadSource.official;
+  ModelDownloadSource _selectedSource = ModelDownloadSource.modelScope;
 
   final Map<String, bool> _installedStatus = {};
   String _modelDirectoryPath = '';
@@ -70,6 +74,284 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
   void _openModelFolder() {
     if (_modelDirectoryPath.isNotEmpty && Platform.isWindows) {
       Process.run('explorer.exe', [_modelDirectoryPath]);
+    }
+  }
+
+  /// 调起目录选择与手动输入弹窗，支持全量资产无损迁移与默认重置
+  Future<void> _showChangeDirectoryDialog() async {
+    final activeBase = await AppStorageService.instance.getActiveBaseDirectory();
+    final isCustom = AppStorageService.instance.isCustomDirActive;
+    final textController = TextEditingController(text: activeBase.path);
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool migrateAssets = true;
+        final screenWidth = MediaQuery.of(ctx).size.width;
+        final isDialogCompact = screenWidth < 500;
+
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.surfaceElevated,
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: isDialogCompact ? 16 : 28,
+                vertical: 24,
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.folder_shared_rounded, color: AppColors.primary, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '修改模型存储目录',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: isDialogCompact ? 16 : 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '您可以将模型及相关音频资产迁移至自定义目录（如 SD卡/外部大容量分区/独立固态硬盘）：',
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5, height: 1.4),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        '存储物理路径',
+                        style: TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: textController,
+                        style: const TextStyle(fontSize: 12.5, fontFamily: 'monospace', color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: '输入或粘贴目标存储物理路径...',
+                          hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                          filled: true,
+                          fillColor: AppColors.background,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: AppColors.cardBorder),
+                          ),
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.folder_open_rounded, color: AppColors.primary, size: 20),
+                            tooltip: '浏览选择文件夹',
+                            onPressed: () async {
+                              try {
+                                final selected = await FilePicker.getDirectoryPath(
+                                  dialogTitle: '选择模型存储基准目录',
+                                );
+                                if (selected != null && selected.trim().isNotEmpty) {
+                                  textController.text = selected.trim();
+                                }
+                              } catch (e) {
+                                if (dialogCtx.mounted) {
+                                  AppToast.error(dialogCtx, '调起文件夹选择器异常: $e');
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InkWell(
+                        onTap: () => setDialogState(() => migrateAssets = !migrateAssets),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Checkbox(
+                                value: migrateAssets,
+                                activeColor: AppColors.primary,
+                                onChanged: (v) => setDialogState(() => migrateAssets = v ?? true),
+                              ),
+                              const Expanded(
+                                child: Text(
+                                  '将现有已下载的模型与音频资产安全迁移至新目录',
+                                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (isCustom) ...[
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.amber,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            ),
+                            icon: const Icon(Icons.restore_rounded, size: 16),
+                            label: const Text('恢复为系统默认目录', style: TextStyle(fontSize: 12)),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              _executeResetToDefault();
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actionsPadding: EdgeInsets.symmetric(
+                horizontal: isDialogCompact ? 14 : 20,
+                vertical: 12,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.check_rounded, size: 17),
+                  label: const Text('确认应用'),
+                  onPressed: () {
+                    final target = textController.text.trim();
+                    if (target.isEmpty) {
+                      AppToast.warning(context, '目标路径不能为空');
+                      return;
+                    }
+                    Navigator.pop(ctx);
+                    _executeDirectoryMigration(target, migrateAssets: migrateAssets);
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 执行迁移并展示全局进度弹窗
+  Future<void> _executeDirectoryMigration(String targetPath, {required bool migrateAssets}) async {
+    final activeBase = await AppStorageService.instance.getActiveBaseDirectory();
+    if (p.canonicalize(targetPath) == p.canonicalize(activeBase.path)) {
+      if (mounted) {
+        AppToast.info(context, '所填目录与当前目录相同，无需变更');
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    double currentProgress = 0.0;
+    String status = '正在准备目录...';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (pCtx) {
+        return StatefulBuilder(
+          builder: (dCtx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.surfaceElevated,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: const Text('正在切换存储并迁移模型', style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(status, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: currentProgress > 0 ? currentProgress : null,
+                      backgroundColor: AppColors.background,
+                      color: AppColors.primary,
+                      minHeight: 7,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    try {
+      if (migrateAssets) {
+        await AppStorageService.instance.migrateAssetsTo(
+          targetDirPath: targetPath,
+          deleteSourceFiles: true,
+          onProgress: (prog, text) {
+            status = text;
+            currentProgress = prog;
+          },
+        );
+      } else {
+        await AppDatabase.instance.saveSetting('app_custom_storage_directory', targetPath);
+        await AppStorageService.instance.init();
+      }
+
+      await _refreshStatus();
+
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        AppToast.success(context, '存储目录已成功更新！');
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        AppToast.error(context, '目录更新失败: $e');
+      }
+    }
+  }
+
+  /// 恢复为系统默认目录
+  Future<void> _executeResetToDefault() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await AppStorageService.instance.resetToDefaultDirectory(migrateBack: true);
+      await _refreshStatus();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        AppToast.success(context, '已恢复为系统默认存储目录，资产已迁回');
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        AppToast.error(context, '恢复失败: $e');
+      }
     }
   }
 
@@ -959,20 +1241,49 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
           if (progress.status == ModelTaskStatus.failed && progress.errorMessage != null) ...[
             const SizedBox(height: 8),
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.rose.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.rose.withValues(alpha: 0.3)),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.error_outline_rounded, color: AppColors.rose, size: 16),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      progress.errorMessage!,
-                      style: const TextStyle(color: AppColors.rose, fontSize: 11.5),
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.error_outline_rounded, color: AppColors.rose, size: 16),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          progress.errorMessage!,
+                          style: const TextStyle(color: AppColors.rose, fontSize: 11.5, height: 1.3),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          foregroundColor: AppColors.primary,
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        ),
+                        icon: const Icon(Icons.refresh_rounded, size: 14),
+                        label: const Text('高速镜像一键重试', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                        onPressed: () {
+                          setState(() => _selectedSource = ModelDownloadSource.modelScope);
+                          _downloadService.downloadModel(model, source: ModelDownloadSource.modelScope);
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -983,46 +1294,132 @@ class _ModelManagerScreenState extends State<ModelManagerScreen> {
     );
   }
 
-  /// 底部存储路径展示 (手机端移动端体验优化，支持一键复制路径)
+  /// 底部存储路径展示 (手机端移动端体验优化，高亮支持一键修改目录与复制路径)
   Widget _buildStoragePathFooter() {
+    final isCustom = AppStorageService.instance.isCustomDirActive;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.folder_open_rounded, color: AppColors.textMuted, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              '模型物理存储目录: $_modelDirectoryPath',
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5),
-              overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              Icon(
+                isCustom ? Icons.folder_special_rounded : Icons.folder_open_rounded,
+                color: isCustom ? AppColors.emerald : AppColors.primary,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '模型物理存储位置',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: (isCustom ? AppColors.emerald : AppColors.textMuted).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  isCustom ? '自定义外部目录' : '系统默认目录',
+                  style: TextStyle(
+                    color: isCustom ? AppColors.emerald : AppColors.textMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.edit_location_alt_rounded, size: 14),
+                label: const Text('修改目录', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                onPressed: _showChangeDirectoryDialog,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _modelDirectoryPath.isEmpty ? '加载中...' : _modelDirectoryPath,
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () {
+                    if (_modelDirectoryPath.isNotEmpty) {
+                      Clipboard.setData(ClipboardData(text: _modelDirectoryPath));
+                      AppToast.success(context, '已复制模型存储路径到剪贴板');
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.copy_rounded, size: 13, color: AppColors.primary),
+                        SizedBox(width: 4),
+                        Text('复制', style: TextStyle(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+                if (Platform.isWindows) ...[
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: _openModelFolder,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.open_in_new_rounded, size: 13, color: AppColors.textMuted),
+                          SizedBox(width: 3),
+                          Text('打开', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          if (Platform.isWindows)
-            TextButton(
-              onPressed: _openModelFolder,
-              child: const Text('打开目录', style: TextStyle(fontSize: 12, color: AppColors.primary)),
-            )
-          else
-            TextButton.icon(
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              icon: const Icon(Icons.copy_rounded, size: 14, color: AppColors.primary),
-              label: const Text('复制', style: TextStyle(fontSize: 12, color: AppColors.primary)),
-              onPressed: () {
-                if (_modelDirectoryPath.isNotEmpty) {
-                  Clipboard.setData(ClipboardData(text: _modelDirectoryPath));
-                  AppToast.success(context, '已复制模型物理路径');
-                }
-              },
-            ),
         ],
       ),
     );

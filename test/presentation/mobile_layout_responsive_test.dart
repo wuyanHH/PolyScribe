@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:polyscribe/data/models/meeting_task.dart';
-import 'package:polyscribe/data/models/transcript_segment.dart';
 import 'package:polyscribe/presentation/models/model_manager_screen.dart';
 import 'package:polyscribe/presentation/player/sync_player_screen.dart';
 import 'package:polyscribe/presentation/settings/subpages/storage_settings_screen.dart';

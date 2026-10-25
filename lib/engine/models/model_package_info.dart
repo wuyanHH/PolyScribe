@@ -18,15 +18,15 @@ enum ModelCategory {
 
 /// 模型下载网络源类型
 enum ModelDownloadSource {
+  modelScope(
+    label: '国内高速镜像源 (ModelScope / 加速镜像)',
+    badge: '推荐高速',
+    description: '阿里魔搭与国内 CDN 高速直连，单文件直出免解压，防 TLS 握手中断',
+  ),
   official(
     label: '官方直连源 (GitHub Releases)',
-    badge: '推荐',
-    description: 'k2-fsa / sherpa-onnx 官方完整构建包，全球 CDN 加速',
-  ),
-  modelScope(
-    label: '国内高速源 (ModelScope)',
-    badge: '国内高速',
-    description: '阿里魔搭社区国内高速镜像，下载体积精简',
+    badge: '国际直连',
+    description: 'k2-fsa 官方构建打包发布包 (适合海外或高速代理环境)',
   );
 
   final String label;
@@ -55,7 +55,7 @@ class DownloadItem {
   });
 }
 
-/// 模型包元数据定义
+/// 模型包元数据定义 (支持子目录沙盒隔离架构与向前兼容平铺结构)
 class ModelPackageInfo {
   final String id;
   final String name;
@@ -64,6 +64,7 @@ class ModelPackageInfo {
   final ModelCategory category;
   final int estimatedSizeBytes;
   final String sizeDisplay;
+  final String sandboxDir; // 模型专属独立沙盒子目录名 (例如 sensevoice_small)
   final List<String> targetFileNames;
   final Map<ModelDownloadSource, List<DownloadItem>> downloadItems;
 
@@ -75,6 +76,7 @@ class ModelPackageInfo {
     this.category = ModelCategory.asr,
     required this.estimatedSizeBytes,
     required this.sizeDisplay,
+    required this.sandboxDir,
     required this.targetFileNames,
     required this.downloadItems,
   });
@@ -82,25 +84,36 @@ class ModelPackageInfo {
   /// 是否为主语音识别 ASR 模型
   bool get isAsrModel => category == ModelCategory.asr;
 
-  /// 检查该模型在目标目录下是否已经完整就绪 (校验最小有效字节数，防止残损文件被误判为已安装)
+  /// 获取该模型在基准目录下的专属沙盒目录绝对路径
+  String getSandboxPath(String baseDirectory) => p.join(baseDirectory, sandboxDir);
+
+  /// 检查该模型在目标目录下是否已经完整就绪 (双向检测沙盒目录与旧版平铺根目录，确保无缝兼容)
   bool isInstalled(String targetDirectory) {
+    final sandbox = getSandboxPath(targetDirectory);
+    // 优先检查沙盒子目录
+    bool sandboxComplete = true;
+    for (final fileName in targetFileNames) {
+      final f = File(p.join(sandbox, fileName));
+      if (!f.existsSync() || f.lengthSync() < (fileName.endsWith('.onnx') ? 100 * 1024 : 100)) {
+        sandboxComplete = false;
+        break;
+      }
+    }
+    if (sandboxComplete) return true;
+
+    // 回退检查根目录 (向后平滑兼容老版本平铺存放的文件)
     for (final fileName in targetFileNames) {
       final file = File(p.join(targetDirectory, fileName));
-      if (!file.existsSync()) {
-        return false;
-      }
-      final len = file.lengthSync();
-      final minRequired = fileName.endsWith('.onnx') ? 100 * 1024 : 100;
-      if (len < minRequired) {
+      if (!file.existsSync() || file.lengthSync() < (fileName.endsWith('.onnx') ? 100 * 1024 : 100)) {
         return false;
       }
     }
     return true;
   }
 
-  /// 获取指定网络源的下载项列表 (若未配置则回退到官方源)
+  /// 获取指定网络源的下载项列表 (若未配置则回退到国内高速源)
   List<DownloadItem> getItems(ModelDownloadSource source) {
-    return downloadItems[source] ?? downloadItems[ModelDownloadSource.official]!;
+    return downloadItems[source] ?? downloadItems[ModelDownloadSource.modelScope]!;
   }
 }
 
@@ -115,6 +128,7 @@ class PredefinedModels {
     category: ModelCategory.asr,
     estimatedSizeBytes: 228 * 1024 * 1024,
     sizeDisplay: '228 MB',
+    sandboxDir: 'sensevoice_small',
     targetFileNames: ['sensevoice_small_int8.onnx', 'tokens.txt'],
     downloadItems: {
       ModelDownloadSource.official: [
@@ -151,17 +165,24 @@ class PredefinedModels {
     category: ModelCategory.asr,
     estimatedSizeBytes: 230 * 1024 * 1024,
     sizeDisplay: '230 MB',
+    sandboxDir: 'paraformer_zh',
     targetFileNames: ['paraformer_model.int8.onnx', 'paraformer_tokens.txt'],
     downloadItems: {
-      ModelDownloadSource.official: [
+      ModelDownloadSource.modelScope: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-2023-09-14.tar.bz2',
-          destinationFileName: 'paraformer_zh.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 230 * 1024 * 1024,
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/model.int8.onnx',
+          destinationFileName: 'paraformer_model.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 243371218,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/tokens.txt',
+          destinationFileName: 'paraformer_tokens.txt',
+          isArchive: false,
+          estimatedSizeBytes: 147570,
         ),
       ],
-      ModelDownloadSource.modelScope: [
+      ModelDownloadSource.official: [
         DownloadItem(
           url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-2023-09-14.tar.bz2',
           destinationFileName: 'paraformer_zh.tar.bz2',
@@ -181,6 +202,7 @@ class PredefinedModels {
     category: ModelCategory.asr,
     estimatedSizeBytes: 480 * 1024 * 1024,
     sizeDisplay: '480 MB',
+    sandboxDir: 'qwen3_asr',
     targetFileNames: [
       'qwen3_conv_frontend.int8.onnx',
       'qwen3_encoder.int8.onnx',
@@ -188,15 +210,33 @@ class PredefinedModels {
       'qwen3_tokenizer.json',
     ],
     downloadItems: {
-      ModelDownloadSource.official: [
+      ModelDownloadSource.modelScope: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2',
-          destinationFileName: 'qwen3_asr.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 480 * 1024 * 1024,
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_conv_frontend.int8.onnx',
+          destinationFileName: 'qwen3_conv_frontend.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 10 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_encoder.int8.onnx',
+          destinationFileName: 'qwen3_encoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 200 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_decoder.int8.onnx',
+          destinationFileName: 'qwen3_decoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 270 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main/qwen3_tokenizer.json',
+          destinationFileName: 'qwen3_tokenizer.json',
+          isArchive: false,
+          estimatedSizeBytes: 500 * 1024,
         ),
       ],
-      ModelDownloadSource.modelScope: [
+      ModelDownloadSource.official: [
         DownloadItem(
           url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2',
           destinationFileName: 'qwen3_asr.tar.bz2',
@@ -216,6 +256,7 @@ class PredefinedModels {
     category: ModelCategory.asr,
     estimatedSizeBytes: 450 * 1024 * 1024,
     sizeDisplay: '450 MB',
+    sandboxDir: 'parakeet_tdt',
     targetFileNames: [
       'parakeet_encoder.int8.onnx',
       'parakeet_decoder.int8.onnx',
@@ -223,15 +264,33 @@ class PredefinedModels {
       'parakeet_tokens.txt',
     ],
     downloadItems: {
-      ModelDownloadSource.official: [
+      ModelDownloadSource.modelScope: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
-          destinationFileName: 'parakeet_tdt.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 450 * 1024 * 1024,
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/encoder.int8.onnx',
+          destinationFileName: 'parakeet_encoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 300 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/decoder.int8.onnx',
+          destinationFileName: 'parakeet_decoder.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 30 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/joiner.int8.onnx',
+          destinationFileName: 'parakeet_joiner.int8.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 10 * 1024 * 1024,
+        ),
+        DownloadItem(
+          url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/tokens.txt',
+          destinationFileName: 'parakeet_tokens.txt',
+          isArchive: false,
+          estimatedSizeBytes: 100 * 1024,
         ),
       ],
-      ModelDownloadSource.modelScope: [
+      ModelDownloadSource.official: [
         DownloadItem(
           url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
           destinationFileName: 'parakeet_tdt.tar.bz2',
@@ -251,6 +310,7 @@ class PredefinedModels {
     category: ModelCategory.vad,
     estimatedSizeBytes: 2 * 1024 * 1024,
     sizeDisplay: '1.8 MB',
+    sandboxDir: 'silero_vad',
     targetFileNames: ['silero_vad.onnx'],
     downloadItems: {
       ModelDownloadSource.official: [
@@ -281,6 +341,7 @@ class PredefinedModels {
     category: ModelCategory.diarization,
     estimatedSizeBytes: 6 * 1024 * 1024,
     sizeDisplay: '6.0 MB',
+    sandboxDir: 'pyannote',
     targetFileNames: ['pyannote_segmentation.onnx'],
     downloadItems: {
       ModelDownloadSource.official: [
@@ -293,10 +354,10 @@ class PredefinedModels {
       ],
       ModelDownloadSource.modelScope: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2',
-          destinationFileName: 'pyannote.tar.bz2',
-          isArchive: true,
-          estimatedSizeBytes: 6 * 1024 * 1024,
+          url: 'https://modelscope.cn/api/v1/models/pengzhendong/sherpa-onnx-pyannote-segmentation-3-0/repo?Revision=master&FilePath=model.onnx',
+          destinationFileName: 'pyannote_segmentation.onnx',
+          isArchive: false,
+          estimatedSizeBytes: 5992913,
         ),
       ],
     },
@@ -311,6 +372,7 @@ class PredefinedModels {
     category: ModelCategory.diarization,
     estimatedSizeBytes: 28 * 1024 * 1024,
     sizeDisplay: '28.0 MB',
+    sandboxDir: 'campp',
     targetFileNames: ['campp_plus.onnx'],
     downloadItems: {
       ModelDownloadSource.official: [
@@ -323,10 +385,10 @@ class PredefinedModels {
       ],
       ModelDownloadSource.modelScope: [
         DownloadItem(
-          url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx',
+          url: 'https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx',
           destinationFileName: 'campp_plus.onnx',
           isArchive: false,
-          estimatedSizeBytes: 28 * 1024 * 1024,
+          estimatedSizeBytes: 39593761,
         ),
       ],
     },

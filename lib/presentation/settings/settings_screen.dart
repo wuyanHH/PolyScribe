@@ -9,6 +9,7 @@ import '../../core/theme/app_theme_provider.dart';
 import '../../data/database/app_database.dart';
 import '../../engine/model_manager.dart';
 import '../../engine/models/model_package_info.dart';
+import '../../services/app_storage_service.dart';
 import '../../services/model_download_service.dart';
 import '../../services/server/http_server.dart';
 import '../models/model_manager_screen.dart';
@@ -38,6 +39,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final int _totalModelsCount = PredefinedModels.all.length;
   String _preferredLanguage = 'zh';
   String _dbSizeText = '计算中...';
+  String _activeStoragePath = '';
+  bool _isCustomStorage = false;
   bool _isLoading = true;
 
   @override
@@ -68,12 +71,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
 
     final savedLang = await AppDatabase.instance.getSetting('preferred_language') ?? 'zh';
+    final activeBase = await AppStorageService.instance.getActiveBaseDirectory();
+    final isCustom = AppStorageService.instance.isCustomDirActive;
 
     if (mounted) {
       setState(() {
         _installedModelsCount = readyCount;
         _dbSizeText = sizeStr;
         _preferredLanguage = savedLang;
+        _activeStoragePath = activeBase.path;
+        _isCustomStorage = isCustom;
         _isLoading = false;
       });
     }
@@ -193,6 +200,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                         Divider(height: 1, indent: 52, color: context.borderColor),
                         _buildNavigationTile(
+                          icon: Icons.folder_shared_rounded,
+                          iconColor: const Color(0xFF0EA5E9),
+                          title: '模型与数据存储目录',
+                          subtitle: _isCustomStorage
+                              ? '自定义路径: $_activeStoragePath'
+                              : '系统默认应用目录 · 支持自定义与资产迁移',
+                          trailingBadge: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: (_isCustomStorage ? AppColors.emerald : AppColors.textMuted).withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              _isCustomStorage ? '自定义目录' : '默认目录',
+                              style: TextStyle(
+                                color: _isCustomStorage ? AppColors.emerald : AppColors.textMuted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const StorageSettingsScreen()),
+                            ).then((_) => _loadSettingsData());
+                          },
+                        ),
+                        Divider(height: 1, indent: 52, color: context.borderColor),
+                        _buildNavigationTile(
                           icon: Icons.tune_rounded,
                           iconColor: AppColors.amber,
                           title: '音频采样与识别调优',
@@ -269,8 +305,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         _buildNavigationTile(
                           icon: Icons.storage_rounded,
                           iconColor: AppColors.emerald,
-                          title: '数据存储与空间维护',
-                          subtitle: 'SQLite 数据库占用: $_dbSizeText · 支持紧缩优化',
+                          title: '存储目录与空间维护',
+                          subtitle: _isCustomStorage
+                              ? '已启用自定义目录 · 数据库: $_dbSizeText · 资产一键迁移'
+                              : '系统默认目录 · 支持修改路径与数据库清理 ($_dbSizeText)',
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(builder: (_) => const StorageSettingsScreen()),

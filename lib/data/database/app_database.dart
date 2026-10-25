@@ -44,7 +44,7 @@ class AppDatabase {
     final dbPath = p.join(dbDir.path, 'polyscribe.db');
     debugPrint('[AppDatabase] 数据库物理路径: $dbPath');
 
-    return await openDatabase(
+    final db = await openDatabase(
       dbPath,
       version: 1,
       onCreate: (db, version) async {
@@ -103,6 +103,18 @@ class AppDatabase {
         ''');
       },
     );
+
+    // 开启 WAL 高并发模式与性能调优
+    try {
+      if (!kIsWeb) {
+        await db.rawQuery('PRAGMA journal_mode=WAL');
+        await db.rawQuery('PRAGMA synchronous=NORMAL');
+      }
+    } catch (e) {
+      debugPrint('[AppDatabase] 启用 WAL 模式提示: $e');
+    }
+
+    return db;
   }
 
   /// 读取系统通用键值设置

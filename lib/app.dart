@@ -21,7 +21,6 @@ class PolyScribeApp extends StatelessWidget {
           AppColors.isDark = isDark;
 
           return MaterialApp(
-            key: ValueKey('$themeMode-$isDark'),
             title: AppConstants.appFullName,
             debugShowCheckedModeBanner: false,
             themeMode: themeMode,

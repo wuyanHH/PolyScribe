@@ -47,6 +47,118 @@ final themeModeProvider = NotifierProvider<ThemeModeNotifier, ThemeMode>(() {
   return ThemeModeNotifier();
 });
 
+/// PolyScribe 语义化设计调色板扩展 (遵循 Flutter 官方标准 ThemeExtension 规范)
+@immutable
+class PolyScribePalette extends ThemeExtension<PolyScribePalette> {
+  final Color bg;
+  final Color surface;
+  final Color surfaceElevated;
+  final Color border;
+  final Color textMain;
+  final Color textSub;
+  final Color textMuted;
+  final Color primary;
+  final Color emerald;
+  final Color amber;
+  final Color rose;
+  final Color cyan;
+
+  const PolyScribePalette({
+    required this.bg,
+    required this.surface,
+    required this.surfaceElevated,
+    required this.border,
+    required this.textMain,
+    required this.textSub,
+    required this.textMuted,
+    required this.primary,
+    required this.emerald,
+    required this.amber,
+    required this.rose,
+    required this.cyan,
+  });
+
+  static const PolyScribePalette dark = PolyScribePalette(
+    bg: AppColors.background,
+    surface: AppColors.surface,
+    surfaceElevated: AppColors.surfaceElevated,
+    border: AppColors.cardBorder,
+    textMain: AppColors.textPrimary,
+    textSub: AppColors.textSecondary,
+    textMuted: AppColors.textMuted,
+    primary: AppColors.primary,
+    emerald: AppColors.emerald,
+    amber: AppColors.amber,
+    rose: AppColors.rose,
+    cyan: AppColors.cyan,
+  );
+
+  static const PolyScribePalette light = PolyScribePalette(
+    bg: AppColors.lightBackground,
+    surface: AppColors.lightSurface,
+    surfaceElevated: AppColors.lightSurfaceElevated,
+    border: AppColors.lightCardBorder,
+    textMain: AppColors.lightTextPrimary,
+    textSub: AppColors.lightTextSecondary,
+    textMuted: AppColors.lightTextMuted,
+    primary: AppColors.primary,
+    emerald: AppColors.emerald,
+    amber: AppColors.amber,
+    rose: AppColors.rose,
+    cyan: AppColors.cyan,
+  );
+
+  @override
+  PolyScribePalette copyWith({
+    Color? bg,
+    Color? surface,
+    Color? surfaceElevated,
+    Color? border,
+    Color? textMain,
+    Color? textSub,
+    Color? textMuted,
+    Color? primary,
+    Color? emerald,
+    Color? amber,
+    Color? rose,
+    Color? cyan,
+  }) {
+    return PolyScribePalette(
+      bg: bg ?? this.bg,
+      surface: surface ?? this.surface,
+      surfaceElevated: surfaceElevated ?? this.surfaceElevated,
+      border: border ?? this.border,
+      textMain: textMain ?? this.textMain,
+      textSub: textSub ?? this.textSub,
+      textMuted: textMuted ?? this.textMuted,
+      primary: primary ?? this.primary,
+      emerald: emerald ?? this.emerald,
+      amber: amber ?? this.amber,
+      rose: rose ?? this.rose,
+      cyan: cyan ?? this.cyan,
+    );
+  }
+
+  @override
+  PolyScribePalette lerp(ThemeExtension<PolyScribePalette>? other, double t) {
+    if (other is! PolyScribePalette) return this;
+    return PolyScribePalette(
+      bg: Color.lerp(bg, other.bg, t) ?? bg,
+      surface: Color.lerp(surface, other.surface, t) ?? surface,
+      surfaceElevated: Color.lerp(surfaceElevated, other.surfaceElevated, t) ?? surfaceElevated,
+      border: Color.lerp(border, other.border, t) ?? border,
+      textMain: Color.lerp(textMain, other.textMain, t) ?? textMain,
+      textSub: Color.lerp(textSub, other.textSub, t) ?? textSub,
+      textMuted: Color.lerp(textMuted, other.textMuted, t) ?? textMuted,
+      primary: Color.lerp(primary, other.primary, t) ?? primary,
+      emerald: Color.lerp(emerald, other.emerald, t) ?? emerald,
+      amber: Color.lerp(amber, other.amber, t) ?? amber,
+      rose: Color.lerp(rose, other.rose, t) ?? rose,
+      cyan: Color.lerp(cyan, other.cyan, t) ?? cyan,
+    );
+  }
+}
+
 /// 应用主题样式工厂 (沉浸暗黑与清新明亮)
 class AppTheme {
   AppTheme._();
@@ -58,6 +170,7 @@ class AppTheme {
       primaryColor: AppColors.primary,
       scaffoldBackgroundColor: AppColors.lightBackground,
       canvasColor: AppColors.lightSurface,
+      extensions: const [PolyScribePalette.light],
       colorScheme: const ColorScheme.light(
         primary: AppColors.primary,
         secondary: AppColors.emerald,
@@ -104,6 +217,7 @@ class AppTheme {
       primaryColor: AppColors.primary,
       scaffoldBackgroundColor: AppColors.background,
       canvasColor: AppColors.surface,
+      extensions: const [PolyScribePalette.dark],
       colorScheme: const ColorScheme.dark(
         primary: AppColors.primary,
         secondary: AppColors.emerald,

@@ -830,7 +830,21 @@ class TaskQueueService {
       }
     });
 
-    // 2. 实时监听每一句转写完成，立即执行增量持久化落库 (断点保护核心机制)
+    // 2. 实时监听每一句转写完成，采用节流批量落库机制 (兼具断点实时保护与极致写库性能，消除 UI 震颤)
+    final List<TranscriptSegment> pendingCommitBuffer = [];
+    Timer? flushTimer;
+
+    Future<void> flushBuffer() async {
+      if (pendingCommitBuffer.isEmpty) return;
+      final toCommit = List<TranscriptSegment>.from(pendingCommitBuffer);
+      pendingCommitBuffer.clear();
+      try {
+        await AppDatabase.instance.insertSegmentsBatch(toCommit);
+      } catch (e) {
+        debugPrint('[TaskQueueService] 批量节流落库段落异常: $e');
+      }
+    }
+
     final segmentSub = worker.onSegmentTranscribed.listen((event) async {
       if (event.taskId == task.id && event.text.trim().isNotEmpty) {
         final seg = TranscriptSegment(
@@ -842,10 +856,16 @@ class TaskQueueService {
           text: event.text,
           words: event.words,
         );
-        try {
-          await AppDatabase.instance.insertSegment(seg);
-        } catch (e) {
-          debugPrint('[TaskQueueService] 实时增量落库段落异常: $e');
+        pendingCommitBuffer.add(seg);
+        if (pendingCommitBuffer.length >= 3) {
+          flushTimer?.cancel();
+          flushTimer = null;
+          await flushBuffer();
+        } else {
+          flushTimer ??= Timer(const Duration(milliseconds: 350), () async {
+            flushTimer = null;
+            await flushBuffer();
+          });
         }
       }
     });
@@ -859,6 +879,10 @@ class TaskQueueService {
         startOffsetMs: startOffsetMs,
         initialSegmentIndex: initialSegmentIndex,
       ));
+
+      // 确保最后的残余片段立即落库
+      flushTimer?.cancel();
+      await flushBuffer();
 
       if (fileResponse == null || !fileResponse.isSuccess) {
         throw Exception(fileResponse?.errorMessage ?? '离线语音转写未返回有效结果');

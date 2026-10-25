@@ -27,6 +27,8 @@ class InferenceWorkerCoordinator {
   ReceivePort? _errorReceivePort;
   bool _isModelLoaded = false;
   Future<bool>? _initializingFuture;
+  ModelConfig? _lastConfig;
+  Timer? _idleTimer;
   final Map<String, Completer<WorkerResponse>> _pendingRequests = {};
 
   final StreamController<SegmentTranscriptionResponse> _segmentStreamController =
@@ -43,8 +45,28 @@ class InferenceWorkerCoordinator {
 
   bool get isReady => _workerSendPort != null && _isModelLoaded;
 
+  /// 激活活动标志，刷新或重置空闲休眠计时器
+  void _touchActive() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+  }
+
+  /// 安排空闲自动休眠 (3分钟无任务自动释放推理内存)
+  void _scheduleIdleSuspend() {
+    _idleTimer?.cancel();
+    if (_isolate != null && _isModelLoaded) {
+      _idleTimer = Timer(const Duration(minutes: 3), () {
+        if (_pendingRequests.isEmpty) {
+          suspend();
+        }
+      });
+    }
+  }
+
   /// 初始化并启动工作线程 Isolate (支持并发重入保护与失败重试)
   Future<bool> initialize(ModelConfig config) async {
+    _lastConfig = config;
+    _touchActive();
     if (_isolate != null && _isModelLoaded) return true;
     if (_initializingFuture != null) return await _initializingFuture!;
 
@@ -159,38 +181,62 @@ class InferenceWorkerCoordinator {
     }
   }
 
-  /// 发送音频切片转写
+  /// 发送音频切片转写 (看门狗自愈保护 + 自动唤醒)
   Future<SegmentTranscriptionResponse?> transcribeChunk(TranscribeChunkCommand cmd) async {
+    _touchActive();
+    if (!isReady && _lastConfig != null) {
+      debugPrint('[InferenceWorker] 推理线程未就绪或处于休眠，看门狗自动预热拉起...');
+      await initialize(_lastConfig!);
+    }
     if (_workerSendPort == null) return null;
 
     final completer = Completer<WorkerResponse>();
     _pendingRequests[cmd.messageId] = completer;
     _workerSendPort!.send(cmd);
 
-    final res = await completer.future;
-    if (res is SegmentTranscriptionResponse) return res;
-    return null;
+    try {
+      final res = await completer.future;
+      if (res is SegmentTranscriptionResponse) return res;
+      return null;
+    } finally {
+      if (_pendingRequests.isEmpty) {
+        _scheduleIdleSuspend();
+      }
+    }
   }
 
-  /// 发送离线完整音频文件转写请求 (支持 Silero-VAD 神经网络自然语音切句与多角色纯净聚类)
+  /// 发送离线完整音频文件转写请求 (支持 Silero-VAD 自然切句、看门狗自愈与任务完成后自动安排休眠)
   Future<TranscribeFileResponse?> transcribeFile(TranscribeFileCommand cmd) async {
+    _touchActive();
+    if (!isReady && _lastConfig != null) {
+      debugPrint('[InferenceWorker] 推理线程未就绪或处于休眠，看门狗自动预热拉起...');
+      await initialize(_lastConfig!);
+    }
     if (_workerSendPort == null) return null;
 
     final completer = Completer<WorkerResponse>();
     _pendingRequests[cmd.messageId] = completer;
     _workerSendPort!.send(cmd);
 
-    final res = await completer.future;
-    if (res is TranscribeFileResponse) return res;
-    return null;
+    try {
+      final res = await completer.future;
+      if (res is TranscribeFileResponse) return res;
+      return null;
+    } finally {
+      if (_pendingRequests.isEmpty) {
+        _scheduleIdleSuspend();
+      }
+    }
   }
 
   /// 中断或取消指定转写任务 (用于任务暂停、队列删除与防死锁保护)
   void cancelTask(String taskId) {
+    _touchActive();
     _workerSendPort?.send(CancelTaskCommand(
       messageId: 'cancel_${DateTime.now().millisecondsSinceEpoch}',
       taskId: taskId,
     ));
+    _scheduleIdleSuspend();
   }
 
   /// 重新加载或热切换模型
@@ -200,8 +246,32 @@ class InferenceWorkerCoordinator {
     return await initialize(config);
   }
 
+  /// 空闲自动挂起与显存回收：释放底层大型 ONNX 权重以大幅降低手机待机功耗
+  Future<void> suspend() async {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    if (_isolate == null) return;
+
+    debugPrint('[InferenceWorker] 触发空闲自动休眠，卸载底层 ONNX 权重以回收系统内存');
+    _workerSendPort?.send(DisposeWorkerCommand(
+      messageId: 'suspend_${DateTime.now().millisecondsSinceEpoch}',
+    ));
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _workerSendPort = null;
+    _isModelLoaded = false;
+    _hostReceivePort?.close();
+    _hostReceivePort = null;
+    _exitReceivePort?.close();
+    _exitReceivePort = null;
+    _errorReceivePort?.close();
+    _errorReceivePort = null;
+  }
+
   /// 销毁并退出工作线程
   Future<void> dispose() async {
+    _idleTimer?.cancel();
+    _idleTimer = null;
     _workerSendPort?.send(DisposeWorkerCommand(
       messageId: 'dispose_${DateTime.now().millisecondsSinceEpoch}',
     ));

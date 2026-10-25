@@ -88,30 +88,97 @@ class _StorageSettingsScreenState extends State<StorageSettingsScreen> {
     }
   }
 
-  /// 选取外部新目录并引导迁移
+  /// 选取外部新目录并引导迁移 (支持文件选择器与手动输入/粘贴双通道)
   Future<void> _selectCustomDirectory() async {
-    try {
-      final selectedPath = await FilePicker.getDirectoryPath(
-        dialogTitle: '选择 PolyScribe 外部存储目录 (模型与音频将移动至此)',
-      );
+    final textController = TextEditingController(text: _activeStoragePath);
 
-      if (selectedPath == null || selectedPath.trim().isEmpty) return;
-      final targetPath = selectedPath.trim();
-
-      if (p.canonicalize(targetPath) == p.canonicalize(_activeStoragePath)) {
-        if (mounted) {
-          AppToast.info(context, '所选目录与当前存储目录相同，无需变更');
-        }
-        return;
-      }
-
-      if (!mounted) return;
-      _showMigrationDialog(targetPath, isResetToDefault: false);
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, '调起文件夹选择器失败: $e');
-      }
-    }
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: context.surfaceColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: Row(
+            children: [
+              const Icon(Icons.folder_shared_rounded, color: AppColors.primary, size: 22),
+              const SizedBox(width: 10),
+              Text('选择或输入存储目录', style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: context.textMain)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '建议选择拥有足够剩余空间的外部分区或存储卡，系统将把全部离线模型与媒体资产移动至此：',
+                style: TextStyle(fontSize: 12.5, color: context.textSub),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: textController,
+                style: TextStyle(fontSize: 12.5, fontFamily: 'monospace', color: context.textMain),
+                decoration: InputDecoration(
+                  hintText: '输入或粘贴目标存储目录物理路径...',
+                  hintStyle: TextStyle(color: context.textGrey, fontSize: 12),
+                  filled: true,
+                  fillColor: context.bg,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: context.borderColor),
+                  ),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.folder_open_rounded, color: AppColors.primary),
+                    tooltip: '浏览文件夹',
+                    onPressed: () async {
+                      try {
+                        final selected = await FilePicker.getDirectoryPath(
+                          dialogTitle: '选择外部存储目录',
+                        );
+                        if (selected != null && selected.trim().isNotEmpty) {
+                          textController.text = selected.trim();
+                        }
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          AppToast.error(ctx, '调起文件夹选择器失败: $e');
+                        }
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                final target = textController.text.trim();
+                if (target.isEmpty) {
+                  AppToast.warning(context, '目标路径不能为空');
+                  return;
+                }
+                Navigator.pop(ctx);
+                if (p.canonicalize(target) == p.canonicalize(_activeStoragePath)) {
+                  AppToast.info(context, '所选目录与当前存储目录相同，无需变更');
+                  return;
+                }
+                _showMigrationDialog(target, isResetToDefault: false);
+              },
+              child: const Text('下一步: 迁移资产'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// 恢复为系统默认目录

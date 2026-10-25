@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme_provider.dart';
 
 /// PolyScribe (声织纪要) 多角色专用视觉规范与调色板
 class AppColors {
@@ -112,15 +113,19 @@ class SpeakerColor {
   });
 }
 
-/// 全局动态色彩上下文感知扩展 (实时响应深浅色主题模式切换)
+/// 全局动态色彩上下文感知扩展 (全面基于 ThemeExtension 声明式色彩流)
 extension AppThemeColors on BuildContext {
   bool get isDark => Theme.of(this).brightness == Brightness.dark;
 
-  Color get bg => isDark ? AppColors.background : AppColors.lightBackground;
-  Color get surfaceColor => isDark ? AppColors.surface : AppColors.lightSurface;
-  Color get surfaceElevatedColor => isDark ? AppColors.surfaceElevated : AppColors.lightSurfaceElevated;
-  Color get borderColor => isDark ? AppColors.cardBorder : AppColors.lightCardBorder;
-  Color get textMain => isDark ? AppColors.textPrimary : AppColors.lightTextPrimary;
-  Color get textSub => isDark ? AppColors.textSecondary : AppColors.lightTextSecondary;
-  Color get textGrey => isDark ? AppColors.textMuted : AppColors.lightTextMuted;
+  PolyScribePalette get palette =>
+      Theme.of(this).extension<PolyScribePalette>() ??
+      (isDark ? PolyScribePalette.dark : PolyScribePalette.light);
+
+  Color get bg => palette.bg;
+  Color get surfaceColor => palette.surface;
+  Color get surfaceElevatedColor => palette.surfaceElevated;
+  Color get borderColor => palette.border;
+  Color get textMain => palette.textMain;
+  Color get textSub => palette.textSub;
+  Color get textGrey => palette.textMuted;
 }

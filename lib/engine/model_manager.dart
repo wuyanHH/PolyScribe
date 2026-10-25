@@ -194,6 +194,26 @@ class ModelManager {
     }
   }
 
+  /// 智能查找模型权重或配置文件物理路径 (优先模型专属沙盒子目录，回退兼容根目录平铺)
+  static String _findModelFilePath(
+    String baseDir,
+    String sandboxDir,
+    List<String> fileNames,
+  ) {
+    // 1. 优先在沙盒子目录下查找有效文件
+    for (final name in fileNames) {
+      final f = File(p.join(baseDir, sandboxDir, name));
+      if (f.existsSync() && f.lengthSync() > 50) return f.path;
+    }
+    // 2. 回退在基准根目录查找 (向后平滑兼容老版本平铺模型)
+    for (final name in fileNames) {
+      final f = File(p.join(baseDir, name));
+      if (f.existsSync() && f.lengthSync() > 50) return f.path;
+    }
+    // 3. 若均不存在，默认返回沙盒内的标准首选路径
+    return p.join(baseDir, sandboxDir, fileNames.first);
+  }
+
   /// 扫描并定位已就绪的模型路径
   Future<ModelConfig> resolveModels() async {
     final dir = await getModelDirectory();
@@ -226,27 +246,27 @@ class ModelManager {
 
     final config = ModelConfig(
       activeAsrModelId: activeAsr,
-      vadModelPath: p.join(modelDirPath, 'silero_vad.onnx'),
-      pyannoteModelPath: p.join(modelDirPath, 'pyannote_segmentation.onnx'),
-      camppModelPath: p.join(modelDirPath, 'campp_plus.onnx'),
+      vadModelPath: _findModelFilePath(modelDirPath, 'silero_vad', ['silero_vad.onnx']),
+      pyannoteModelPath: _findModelFilePath(modelDirPath, 'pyannote', ['pyannote_segmentation.onnx', 'model.onnx']),
+      camppModelPath: _findModelFilePath(modelDirPath, 'campp', ['campp_plus.onnx', '3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx']),
       preferredLanguage: savedLang,
       hotwords: savedHotwords,
       // SenseVoice
-      senseVoiceModelPath: p.join(modelDirPath, 'sensevoice_small_int8.onnx'),
-      senseVoiceTokensPath: p.join(modelDirPath, 'tokens.txt'),
+      senseVoiceModelPath: _findModelFilePath(modelDirPath, 'sensevoice_small', ['sensevoice_small_int8.onnx', 'model_q8.onnx', 'model.int8.onnx', 'model.onnx']),
+      senseVoiceTokensPath: _findModelFilePath(modelDirPath, 'sensevoice_small', ['tokens.txt']),
       // Paraformer
-      paraformerModelPath: p.join(modelDirPath, 'paraformer_model.int8.onnx'),
-      paraformerTokensPath: p.join(modelDirPath, 'paraformer_tokens.txt'),
+      paraformerModelPath: _findModelFilePath(modelDirPath, 'paraformer_zh', ['paraformer_model.int8.onnx', 'model.int8.onnx', 'model.onnx']),
+      paraformerTokensPath: _findModelFilePath(modelDirPath, 'paraformer_zh', ['paraformer_tokens.txt', 'tokens.txt']),
       // Qwen3-ASR
-      qwen3ConvFrontendPath: p.join(modelDirPath, 'qwen3_conv_frontend.int8.onnx'),
-      qwen3EncoderPath: p.join(modelDirPath, 'qwen3_encoder.int8.onnx'),
-      qwen3DecoderPath: p.join(modelDirPath, 'qwen3_decoder.int8.onnx'),
-      qwen3TokenizerPath: p.join(modelDirPath, 'qwen3_tokenizer.json'),
+      qwen3ConvFrontendPath: _findModelFilePath(modelDirPath, 'qwen3_asr', ['qwen3_conv_frontend.int8.onnx', 'conv_frontend.int8.onnx']),
+      qwen3EncoderPath: _findModelFilePath(modelDirPath, 'qwen3_asr', ['qwen3_encoder.int8.onnx', 'encoder.int8.onnx']),
+      qwen3DecoderPath: _findModelFilePath(modelDirPath, 'qwen3_asr', ['qwen3_decoder.int8.onnx', 'decoder.int8.onnx']),
+      qwen3TokenizerPath: _findModelFilePath(modelDirPath, 'qwen3_asr', ['qwen3_tokenizer.json', 'tokenizer.json', 'tokens.txt']),
       // Parakeet-TDT
-      parakeetEncoderPath: p.join(modelDirPath, 'parakeet_encoder.int8.onnx'),
-      parakeetDecoderPath: p.join(modelDirPath, 'parakeet_decoder.int8.onnx'),
-      parakeetJoinerPath: p.join(modelDirPath, 'parakeet_joiner.int8.onnx'),
-      parakeetTokensPath: p.join(modelDirPath, 'parakeet_tokens.txt'),
+      parakeetEncoderPath: _findModelFilePath(modelDirPath, 'parakeet_tdt', ['parakeet_encoder.int8.onnx', 'encoder.int8.onnx']),
+      parakeetDecoderPath: _findModelFilePath(modelDirPath, 'parakeet_tdt', ['parakeet_decoder.int8.onnx', 'decoder.int8.onnx']),
+      parakeetJoinerPath: _findModelFilePath(modelDirPath, 'parakeet_tdt', ['parakeet_joiner.int8.onnx', 'joiner.int8.onnx']),
+      parakeetTokensPath: _findModelFilePath(modelDirPath, 'parakeet_tdt', ['parakeet_tokens.txt', 'tokens.txt']),
     );
 
     // 如果选中的主模型尚未就绪，但有其他模型已就绪，则智能自动回退就绪模型
